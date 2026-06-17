@@ -104,10 +104,8 @@ func RegisterMongoDBInstance(name string, opts ...ClientBuilderOpt) {
 
 // GetMongoDBInstance gets the mongodb instance options by name.
 func GetMongoDBInstance(name string) ([]ClientBuilderOpt, bool) {
-	if _, ok := mongodbRegistry[name]; !ok {
-		return nil, false
-	}
-	return mongodbRegistry[name], true
+	instance, ok := mongodbRegistry[name]
+	return instance, ok
 }
 
 // Client defines the interface for MongoDB operations.
