@@ -40,14 +40,8 @@ func GetClientBuilder() clientBuilder {
 	return globalBuilder
 }
 
-// mongoConnector is the function used to connect to MongoDB.
-// It is overridable in tests to inject a fake connector.
-var mongoConnector = func(ctx context.Context, opts ...*options.ClientOptions) (*mongo.Client, error) {
-	return mongo.Connect(ctx, opts...)
-}
-
 // defaultClientBuilder is the default mongodb client builder.
-// It creates a native MongoDB client using the official Go driver.
+// It connects with the official Go driver and verifies the connection before returning.
 func defaultClientBuilder(ctx context.Context, builderOpts ...ClientBuilderOpt) (Client, error) {
 	o := &ClientBuilderOpts{}
 	for _, opt := range builderOpts {
@@ -58,18 +52,49 @@ func defaultClientBuilder(ctx context.Context, builderOpts ...ClientBuilderOpt) 
 		return nil, errors.New("mongodb: uri is empty")
 	}
 
-	client, err := mongoConnector(ctx, options.Client().ApplyURI(o.URI))
+	client, err := mongo.Connect(ctx, options.Client().ApplyURI(o.URI))
 	if err != nil {
 		return nil, fmt.Errorf("mongodb: connect: %w", err)
 	}
 
-	// Verify connection.
 	if err := client.Ping(ctx, nil); err != nil {
 		_ = client.Disconnect(ctx)
 		return nil, fmt.Errorf("mongodb: ping: %w", err)
 	}
 
-	return newDefaultClient(client), nil
+	return &defaultClient{client: client}, nil
+}
+
+// ClientBuilderOpt is the option for the mongodb client.
+type ClientBuilderOpt func(*ClientBuilderOpts)
+
+// ClientBuilderOpts is the options for the mongodb client.
+type ClientBuilderOpts struct {
+	// URI is the mongodb connection string.
+	// Format: mongodb://[username:password@]host1[:port1][,...hostN[:portN]][/[defaultauthdb][?options]]
+	// Example: mongodb://user:pass@localhost:27017/?replicaSet=rs0
+	URI string
+
+	// ExtraOptions is the extra options for the mongodb client.
+	// This option is mainly used for customized mongodb client builders;
+	// it is passed through verbatim and ignored by the default builder.
+	ExtraOptions []any
+}
+
+// WithClientBuilderURI sets the mongodb connection URI for clientBuilder.
+func WithClientBuilderURI(uri string) ClientBuilderOpt {
+	return func(opts *ClientBuilderOpts) {
+		opts.URI = uri
+	}
+}
+
+// WithExtraOptions sets the mongodb client extra options for clientBuilder.
+// This option is mainly used for customized mongodb client builders, it will
+// be passed to the builder.
+func WithExtraOptions(extraOptions ...any) ClientBuilderOpt {
+	return func(opts *ClientBuilderOpts) {
+		opts.ExtraOptions = append(opts.ExtraOptions, extraOptions...)
+	}
 }
 
 // RegisterMongoDBInstance registers a mongodb instance with the given options.
@@ -87,54 +112,27 @@ func GetMongoDBInstance(name string) ([]ClientBuilderOpt, bool) {
 
 // Client defines the interface for MongoDB operations.
 // It abstracts the common MongoDB operations needed by upstream packages
-// (such as session/mongodb), making it easier to inject mock implementations
-// for testing.
+// (such as session/mongodb), making it easier to inject mock implementations for testing.
 type Client interface {
-	// InsertOne inserts a single document into the collection.
 	InsertOne(ctx context.Context, database, coll string, document any,
 		opts ...*options.InsertOneOptions) (*mongo.InsertOneResult, error)
 
-	// InsertMany inserts multiple documents into the collection in a single batch.
-	InsertMany(ctx context.Context, database, coll string, documents []any,
-		opts ...*options.InsertManyOptions) (*mongo.InsertManyResult, error)
-
-	// UpdateOne updates at most one document matching the filter.
 	UpdateOne(ctx context.Context, database, coll string, filter, update any,
 		opts ...*options.UpdateOptions) (*mongo.UpdateResult, error)
 
-	// UpdateMany updates all documents matching the filter.
-	UpdateMany(ctx context.Context, database, coll string, filter, update any,
-		opts ...*options.UpdateOptions) (*mongo.UpdateResult, error)
-
-	// DeleteOne deletes at most one document matching the filter.
 	DeleteOne(ctx context.Context, database, coll string, filter any,
 		opts ...*options.DeleteOptions) (*mongo.DeleteResult, error)
 
-	// DeleteMany deletes all documents matching the filter.
 	DeleteMany(ctx context.Context, database, coll string, filter any,
 		opts ...*options.DeleteOptions) (*mongo.DeleteResult, error)
 
-	// FindOne finds a single document matching the filter.
 	FindOne(ctx context.Context, database, coll string, filter any,
 		opts ...*options.FindOneOptions) *mongo.SingleResult
-
-	// FindOneAndUpdate atomically finds a single document and updates it.
-	FindOneAndUpdate(ctx context.Context, database, coll string, filter, update any,
-		opts ...*options.FindOneAndUpdateOptions) *mongo.SingleResult
 
 	// Find returns a cursor over documents matching the filter.
 	// Callers must close the returned cursor when done.
 	Find(ctx context.Context, database, coll string, filter any,
 		opts ...*options.FindOptions) (*mongo.Cursor, error)
-
-	// Aggregate runs an aggregation pipeline on the collection and returns a cursor.
-	// Callers must close the returned cursor when done.
-	Aggregate(ctx context.Context, database, coll string, pipeline any,
-		opts ...*options.AggregateOptions) (*mongo.Cursor, error)
-
-	// CountDocuments returns the number of documents matching the filter.
-	CountDocuments(ctx context.Context, database, coll string, filter any,
-		opts ...*options.CountOptions) (int64, error)
 
 	// EnsureIndexes creates the given indexes on the collection if they do not exist.
 	// Index creation is idempotent: existing indexes with matching keys and options
@@ -181,102 +179,45 @@ func WithSessionOptions(o *options.SessionOptions) TxOption {
 	}
 }
 
-// session is the subset of *mongo.Session used by defaultClient.
-// Defining it as an interface lets tests inject a fake session without
-// connecting to a real MongoDB deployment.
-type session interface {
-	EndSession(ctx context.Context)
-	WithTransaction(ctx context.Context, fn func(sc mongo.SessionContext) (any, error),
-		opts ...*options.TransactionOptions) (any, error)
-}
-
 // defaultClient wraps *mongo.Client to implement the Client interface.
 type defaultClient struct {
-	client       *mongo.Client
-	startSession func(opts ...*options.SessionOptions) (session, error)
-}
-
-// newDefaultClient creates a new defaultClient with the given mongo.Client.
-func newDefaultClient(client *mongo.Client) *defaultClient {
-	return &defaultClient{
-		client: client,
-		startSession: func(opts ...*options.SessionOptions) (session, error) {
-			return client.StartSession(opts...)
-		},
-	}
+	client *mongo.Client
 }
 
 func (c *defaultClient) coll(database, coll string) *mongo.Collection {
 	return c.client.Database(database).Collection(coll)
 }
 
-// InsertOne implements Client.InsertOne.
 func (c *defaultClient) InsertOne(ctx context.Context, database, coll string, document any,
 	opts ...*options.InsertOneOptions) (*mongo.InsertOneResult, error) {
 	return c.coll(database, coll).InsertOne(ctx, document, opts...)
 }
 
-// InsertMany implements Client.InsertMany.
-func (c *defaultClient) InsertMany(ctx context.Context, database, coll string, documents []any,
-	opts ...*options.InsertManyOptions) (*mongo.InsertManyResult, error) {
-	return c.coll(database, coll).InsertMany(ctx, documents, opts...)
-}
-
-// UpdateOne implements Client.UpdateOne.
 func (c *defaultClient) UpdateOne(ctx context.Context, database, coll string, filter, update any,
 	opts ...*options.UpdateOptions) (*mongo.UpdateResult, error) {
 	return c.coll(database, coll).UpdateOne(ctx, filter, update, opts...)
 }
 
-// UpdateMany implements Client.UpdateMany.
-func (c *defaultClient) UpdateMany(ctx context.Context, database, coll string, filter, update any,
-	opts ...*options.UpdateOptions) (*mongo.UpdateResult, error) {
-	return c.coll(database, coll).UpdateMany(ctx, filter, update, opts...)
-}
-
-// DeleteOne implements Client.DeleteOne.
 func (c *defaultClient) DeleteOne(ctx context.Context, database, coll string, filter any,
 	opts ...*options.DeleteOptions) (*mongo.DeleteResult, error) {
 	return c.coll(database, coll).DeleteOne(ctx, filter, opts...)
 }
 
-// DeleteMany implements Client.DeleteMany.
 func (c *defaultClient) DeleteMany(ctx context.Context, database, coll string, filter any,
 	opts ...*options.DeleteOptions) (*mongo.DeleteResult, error) {
 	return c.coll(database, coll).DeleteMany(ctx, filter, opts...)
 }
 
-// FindOne implements Client.FindOne.
 func (c *defaultClient) FindOne(ctx context.Context, database, coll string, filter any,
 	opts ...*options.FindOneOptions) *mongo.SingleResult {
 	return c.coll(database, coll).FindOne(ctx, filter, opts...)
 }
 
-// FindOneAndUpdate implements Client.FindOneAndUpdate.
-func (c *defaultClient) FindOneAndUpdate(ctx context.Context, database, coll string, filter, update any,
-	opts ...*options.FindOneAndUpdateOptions) *mongo.SingleResult {
-	return c.coll(database, coll).FindOneAndUpdate(ctx, filter, update, opts...)
-}
-
-// Find implements Client.Find.
 func (c *defaultClient) Find(ctx context.Context, database, coll string, filter any,
 	opts ...*options.FindOptions) (*mongo.Cursor, error) {
 	return c.coll(database, coll).Find(ctx, filter, opts...)
 }
 
-// Aggregate implements Client.Aggregate.
-func (c *defaultClient) Aggregate(ctx context.Context, database, coll string, pipeline any,
-	opts ...*options.AggregateOptions) (*mongo.Cursor, error) {
-	return c.coll(database, coll).Aggregate(ctx, pipeline, opts...)
-}
-
-// CountDocuments implements Client.CountDocuments.
-func (c *defaultClient) CountDocuments(ctx context.Context, database, coll string, filter any,
-	opts ...*options.CountOptions) (int64, error) {
-	return c.coll(database, coll).CountDocuments(ctx, filter, opts...)
-}
-
-// EnsureIndexes implements Client.EnsureIndexes.
 func (c *defaultClient) EnsureIndexes(ctx context.Context, database, coll string,
 	models []mongo.IndexModel, opts ...*options.CreateIndexesOptions) ([]string, error) {
 	if len(models) == 0 {
@@ -285,9 +226,9 @@ func (c *defaultClient) EnsureIndexes(ctx context.Context, database, coll string
 	return c.coll(database, coll).Indexes().CreateMany(ctx, models, opts...)
 }
 
-// Transaction implements Client.Transaction.
-// It starts a session, executes fn inside session.WithTransaction (which handles
-// commit, rollback and transient-error retries internally), and ends the session.
+// Transaction starts a session, executes fn inside session.WithTransaction
+// (which handles commit, rollback and transient-error retries internally),
+// and ends the session.
 func (c *defaultClient) Transaction(ctx context.Context, fn TxFunc, opts ...TxOption) error {
 	txOpts := &TxOptions{}
 	for _, opt := range opts {
@@ -299,7 +240,7 @@ func (c *defaultClient) Transaction(ctx context.Context, fn TxFunc, opts ...TxOp
 		sessOpts = append(sessOpts, txOpts.Session)
 	}
 
-	sess, err := c.startSession(sessOpts...)
+	sess, err := c.client.StartSession(sessOpts...)
 	if err != nil {
 		return fmt.Errorf("mongodb: start session: %w", err)
 	}
@@ -316,7 +257,6 @@ func (c *defaultClient) Transaction(ctx context.Context, fn TxFunc, opts ...TxOp
 	return err
 }
 
-// Close implements Client.Close.
 func (c *defaultClient) Close(ctx context.Context) error {
 	return c.client.Disconnect(ctx)
 }
