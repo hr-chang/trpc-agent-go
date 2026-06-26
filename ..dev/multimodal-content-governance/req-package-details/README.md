@@ -1,15 +1,18 @@
 # 需求包技术细节索引
 
 ## 文档定位
-本目录承接 `../requirement-packages.md` 中不适合直接放在需求拆解层的代码链路、字段、函数和实现证据。
+本目录承接 `../req-breakdown.md` 中不适合直接放在需求拆解层的代码链路、字段、函数和实现证据。
 
 阅读关系：
-- `../requirement-packages.md`：面向需求评审，描述需求包目标、范围、边界、依赖和验收。
+- `../req-breakdown.md`：面向需求评审，描述需求包目标、范围、边界、依赖和验收。
 - 本目录：面向需求设计和实现评审，记录每个需求包为什么成立，以及哪些代码路径需要重点关注。
 - `../storage-path-inventory.md`：完整入口到存储路径盘点，本目录只提取和需求包直接相关的技术细节。
 
 ## 文件列表
-- [`01_A_session_ex.md`](./01_A_session_ex.md)：需求包 A，Session 多模态外存最小闭环。
+- 需求包 A：Session 多模态外存最小闭环。
+    - [`01_A_session_ex/req-scope.md`](./01_A_session_ex/req-scope.md)
+    - [`01_A_session_ex/tech-design.md`](./01_A_session_ex/tech-design.md)
+    - [`01_A_session_ex/core-issues.md`](./01_A_session_ex/core-issues.md)
 - [`02_B_agui_track.md`](./02_B_agui_track.md)：需求包 B，AG-UI Track 多模态治理。
 - [`03_C_tool_result.md`](./03_C_tool_result.md)：需求包 C，Tool Result Inline Blob 与结果表示治理。
 - [`04_D_workspace.md`](./04_D_workspace.md)：需求包 D，Workspace Dereference 与临时文件治理。
