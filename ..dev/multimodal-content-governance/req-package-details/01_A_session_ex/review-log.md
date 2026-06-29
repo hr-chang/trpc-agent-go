@@ -8,8 +8,7 @@
 - 状态变更时更新顶部「状态」字段，并在「讨论与回应」里留一条变更说明，不要删除历史。
 
 ## 1. 状态总览
-- 已处理：R-02（隐含契约注释）、R-07（零散清理）、R-09（sentinel error）。
-- 需迭代：R-01（覆盖率未达门禁，search/window hydrate 路径未覆盖）。
+- 已处理：R-01（覆盖率补充）、R-02（隐含契约注释）、R-07（零散清理）、R-09（sentinel error）、R-10（CodeRabbit 关键意见）。
 - 待确认：R-03（早期校验）。
 - 建议记录即可：R-04（默认 hydrate 兜底）、R-06（组合样板已接受，但连带拉低覆盖率）。
 - 低优先待办：R-05（拆文件）、R-08（扩展名确定性）。
@@ -18,7 +17,7 @@
 ## 2. 待跟进项
 
 ### R-01 patch 测试覆盖率不达标
-- 状态：需迭代
+- 状态：已修复
 - 分类：合并门禁
 - 描述：codecov 报告本 PR patch coverage 约 47.3%，低于 85% 目标，patch check 失败。未覆盖分支集中在：audio/file 的外存与 hydrate、data URL 解析（base64 与非 base64）、混合/历史 session、`artifactNameVersion` 错误分支、可选接口组合的部分类型、runner 集成路径、`runner/runner.go` 装配分支。
 - 建议：作为框架底层能力，补齐核心分支单测以过门禁；用例清单见 `test-plan.md` 第 11 节缺口部分。
@@ -26,6 +25,7 @@
     - 2026-06-29 评审: 列为优先确认项，需决定是否在本 PR 内补齐。
     - 2026-06-29 研发: 已补充 audio/file 外存与 hydrate、base64/非 base64 data URL、混合历史 session、artifact ref 错误分支、runner option/装配路径等测试；聚焦测试通过。
     - 2026-06-29 评审: 复核后覆盖率仍未达门禁，从「已修复」回退为「需迭代」。本地包级语句覆盖率约 79.1% < 85% 目标，关键空白：`service.go` 的 `searchEvents` hydrate（约 line 320）从未被调用（`searchOnlyService` 仅是 mock 定义，没有真正发起 `SearchEvents` 并断言 hydrate）；组合 wrapper 各类型的 `SearchEvents`/`GetEventWindow` 大多 0%，`GetEventWindow` 仅一种组合被命中。建议补「包装 searchable 服务 → 调 `SearchEvents` → 断言事件已 hydrate」用例后，再对照 PR 实际 codecov patch 数确认门禁。
+    - 2026-06-29 研发: 已补充 `SearchEvents` 行为断言，fake 返回 `ContentRef` 事件并校验返回结果已 hydrate 且清除 `ContentRef`；同时补充 `NewRunnerWithAgentFactory` 构造路径测试。
 
 ### R-02 `appendObserved` 的跨 backend 隐含契约
 - 状态：已修复
@@ -97,6 +97,13 @@
 - 讨论与回应：
     - 2026-06-29 评审: 已知小问题，约定后续再提。
     - 2026-06-29 研发: 已新增 `ErrArtifactServiceNil` 与 `ErrInvalidArtifactRef`，相关外存/hydrate/引用解析错误通过 `%w` 包装，并补充 `errors.Is` 测试。
+
+### R-10 CodeRabbit 最新可执行意见
+- 状态：已修复
+- 分类：稳定性 / 数据完整性 / 测试质量 / 依赖安全
+- 描述：CodeRabbit 针对 PR #2034 最新提交提出 4 个 actionable 与 3 个 nitpick：`hydrateEvent` 缺少 nil artifact service 防线；hydrate 未校验 `ContentRef` 完整性元数据；hydrate 后仍保留内部 `ContentRef`；`test/go.mod` OTel 依赖低于修复版本；`SearchEvents`、`NewRunnerWithAgentFactory`、E2E 负向路径测试断言不足。
+- 讨论与回应：
+    - 2026-06-29 研发: 已在 `hydrateEvent` 增加 fail-closed nil guard；hydrate 时校验 `SizeBytes` / `SHA256`，并在成功恢复标准 content 后清除 `ContentRef`；补充 SearchEvents hydrate、AgentFactory 构造路径、E2E 具体错误断言；升级 test 模块中 OTel SDK 与 metric exporter 相关依赖到 v1.43.0。
 
 ## 3. 新增事项模板
 > 复制以下模板追加到第 2 节末尾，编号顺延。
