@@ -166,6 +166,75 @@ A 不按来源区分是否业务自定义。只要进入 `session.Events` 的内
     - 是否从 data URL 转换而来。
     - 必要的 provider 相关字段，例如 image detail。
 
+### 6.5 两个核心实现点
+A 包首期把治理逻辑落在两个明确位置。
+
+#### 装配位置
+基于现有代码，治理能力应在 runner 构造期装配，而不是改每一个 `AppendEvent` / `GetSession` 调用点。
+
+现有装配点：
+- `runner.NewRunner`：
+    - 当前会解析 `options.sessionService`。
+    - 如果未配置，则创建 `inmemory.NewSessionService()`。
+    - 随后把 `options.sessionService` 赋值给 `runner.sessionService`。
+- `runner.NewRunnerWithAgentFactory`：
+    - 具有同样的 `options.sessionService` 初始化和赋值逻辑。
+
+建议插入：
+```text
+options := newOptions(opts...)
+ensure options.sessionService
+if session multimodal externalization enabled:
+  options.sessionService = sessionmm.Wrap(options.sessionService, cfg, artifactService)
+runner.sessionService = options.sessionService
+```
+
+这样 runner 内现有所有 `r.sessionService.AppendEvent(...)` 和 `r.sessionService.GetSession(...)` 调用都能复用同一治理逻辑。`newRunInvocation` 也会把包装后的 `r.sessionService` 注入到 invocation，因此 agent/tool 内部通过 invocation 访问 session service 时也能走同一层治理。
+
+#### 实现点一：外存点
+位置：
+```text
+new session governance decorator.AppendEvent
+  -> build persisted event
+  -> inner.AppendEvent(ctx, sess, persistedEvt, opts...)
+```
+
+职责：
+- 在进入具体 session backend 前，把 runtime event 转换为 persisted event。
+- 遍历 event 中标准 `ContentParts`，识别 image/audio/file 的 inline bytes 或 data URL。
+- 将命中的 inline 内容保存到 `artifact.Service`。
+- 在 persisted event 中清空 inline data，并写入 `ContentRef` / metadata。
+- 保证 runtime event 原对象不被修改。
+
+失败语义：
+- artifact save 失败：返回错误，不调用 inner `AppendEvent`。
+- inner `AppendEvent` 失败：返回 append 错误，并对本次已保存成功的 artifact 提交 best-effort 删除请求。
+- cleanup 失败：不能覆盖原始 save/append 错误。
+
+#### 实现点二：解压点
+位置：
+```text
+new session governance decorator.GetSession
+  -> inner.GetSession(ctx, key, opts...)
+  -> hydrate session before returning to caller
+```
+
+职责：
+- 在具体 session backend 返回 persisted session 后、业务拿到 session 前，默认 hydrate internal artifact ref。
+- 将 `ContentRef` / `artifact://<name>@<version>` 恢复为标准 `ContentParts` 中的 bytes/data 表达。
+- 保持 `GetSession` 的业务可见行为接近历史 inline session。
+- hydrate 只影响返回给调用方的 session view，不把 bytes 写回 persisted event。
+- hydrate 路径采用 copy-on-write：只有命中需要恢复的 ref 时才 clone 并填充 bytes，避免污染 backend 内部持有的 persisted view。
+
+失败语义：
+- artifact load 失败或 ref 无法解析：返回明确错误。
+- 不静默返回缺失内容的 session。
+
+补充防线：
+- 模型请求构造前仍需校验 unresolved internal ref。
+- 正常路径下 `GetSession` 默认 hydrate 已经恢复内容；该防线用于覆盖未来 without-hydrate、内部 persisted view、注入消息等路径。
+- hydrate helper 首期仅框架内部使用，不对框架外公开；但 helper 本身应保持可单测，避免 hydrate 逻辑只能通过完整 runner/session 集成链路验证。
+
 ## 7. 建议数据表示
 ### 7.1 artifact URI
 调研结论：
@@ -201,7 +270,8 @@ artifact://<name>@<version>
 建议 persisted 表达：
 - content part 原有语义字段保留必要非二进制信息。
 - inline bytes/data URL 被清空。
-- 新增或挂载统一 internal ref/metadata，用于记录 artifact 位置和恢复信息。
+- 在 `model.ContentPart` 上新增明确的统一字段，例如 `ContentRef *ContentRef`，用于记录 artifact 位置和恢复信息。
+- 不把 internal ref 分散放进 `Image`、`Audio`、`File` 各自结构，也不复用 provider URL / file id 字段。
 
 建议 metadata 至少包含：
 - 引用字段：
@@ -242,12 +312,12 @@ internal ref 只用于框架内部 persisted view：
 ### 8.1 主流程
 ```text
 runtime event
+  -> session governance decorator.AppendEvent
   -> traverse standard ContentParts
-  -> decide keep inline or externalize
   -> clone only if replacement is needed
   -> save inline objects to artifact
   -> replace inline data with internal refs in persisted event
-  -> append persisted event to session backend
+  -> inner session backend.AppendEvent(persisted event)
 ```
 
 ### 8.2 需要覆盖的写入面
@@ -283,6 +353,15 @@ DB backend 只负责存储，不应理解多模态治理策略。否则每个 ba
 - 增加 persisted view / lazy hydrate / message-event 粒度 hydrate。
 - 对模型请求构造、前端回放、调试和评测做按需 hydrate。
 
+默认读取链路：
+```text
+caller
+  -> session governance decorator.GetSession
+  -> inner session backend.GetSession(persisted session)
+  -> hydrate internal refs
+  -> return hydrated session view
+```
+
 ### 9.2 建议 hydrate 触发点
 首期默认：
 - `GetSession` 默认 hydrate，保持业务可见行为与历史 inline session 一致。
@@ -309,9 +388,15 @@ DB backend 只负责存储，不应理解多模态治理策略。否则每个 ba
 - 是否按 provider 能力选择 file_id / file_data / URL 的性能优化策略。
 
 ### 9.3 hydrate API 形态
-建议提供独立 helper，而不是把能力藏在 session backend 内部。
+建议提供框架内部独立 helper，而不是把能力藏在 session backend 内部。
 
-候选 API：
+首期边界：
+- hydrate helper 仅作为框架内部能力。
+- 不对框架外公开 hydrate API，避免增加业务心智负担。
+- helper 放在框架内部可测试位置，允许内部单元测试直接覆盖 message/event/session 粒度 hydrate。
+- 后续如果业务明确需要按 message/event/session 手动 hydrate，再评估公开 API。
+
+内部候选 API 形态：
 ```go
 HydrateMessage(ctx, sessionInfo, msg, opts) (model.Message, error)
 HydrateEvent(ctx, sessionInfo, evt, opts) (*event.Event, error)
@@ -322,6 +407,12 @@ HydrateSession(ctx, sess, opts) (*session.Session, error)
 - hydrate 单条 message。
 - hydrate 单个 event。
 - 模型请求构造链路可复用。
+
+“内部但可测试”的含义：
+- 不作为 public API 暴露给框架外业务，不要求业务理解或手动调用。
+- 不把 hydrate 逻辑完全写死在 `GetSession` 方法体内，而是沉到独立 helper，供 decorator 和模型请求构造链路复用。
+- helper 通过参数注入 `artifact.Service`、session info 和必要配置，避免依赖全局状态。
+- 单元测试可以直接构造含 `ContentRef` 的 message/event/session，验证正常 hydrate、历史 inline、混合 session、load 失败等语义。
 
 ## 10. Artifact 命名与上下文
 ### 10.1 session 信息
@@ -340,21 +431,30 @@ HydrateSession(ctx, sess, opts) (*session.Session, error)
 - S3 实现当前会拒绝包含 `/` 的 filename。
 - 部分工具路径已有 `out/site.zip` 这类 ref 表达，但 A 包作为底层 session 治理能力，应优先选择各实现都更容易接受的保守命名。
 
-已确认：首期 artifact name 使用不含路径分隔符的稳定名字。
+已确认：首期 artifact name 使用不含路径分隔符的稳定名字，并加入时间戳便于按名称排序和排查。
 
 ```text
-sessionpart_<uuid>_<sha256-16>.<ext>
+sessionpart_<unix-ms>_<sha256-16>_<uuid>.<ext>
 ```
 
 说明：
+- 时间戳：
+    - `unix-ms` 使用治理层生成 artifact name 时的 Unix millisecond timestamp。
+    - 该字段只用于排序、排查和粗略定位，不承担唯一性主责。
 - 唯一性：
     - `uuid` 由治理层通过 `uuid.NewString()` 生成，用于 artifact object id。
     - 每个 content part 独立生成 filename，避免同 filename 多 version 承担 part 区分职责。
 - 可调试：
-    - `sha256-16` 是内容 sha256 的前 16 位，用于调试和弱校验，不承担唯一性主责。
+    - `sha256-16` 是内容 sha256 的前 16 位，用于调试、弱校验和离线过滤，不承担唯一性主责。
     - `ext` 只用于可读性，真实恢复依赖 metadata 中的 mime type / format。
 - owner 信息：
     - `event_key`、`request_id`、`message_index`、`part_index` 等 owner 信息放 metadata，不塞进 filename。
+
+关于 hash 位置：
+- 相比 `sessionpart_<uuid>_<sha256-16>.<ext>`，把 hash 放到 uuid 前面更利于人眼扫描和离线过滤。
+- 当前 artifact API 主要按完整 filename 读取，hash 前移不会直接带来在线查询能力。
+- 若未来需要按内容 hash 做前缀查询或 dedupe，可再评估 `sessionpart_<sha256-16>_<unix-ms>_<uuid>.<ext>` 或独立索引。
+- 首期更看重按时间排序和排查，因此采用 `unix-ms` 在前、hash 在中、uuid 在后的顺序。
 
 命名原则：
 - 不使用用户原始文件名作为唯一键。
@@ -386,12 +486,18 @@ sessionpart_<uuid>_<sha256-16>.<ext>
 ### 11.2 配置入口与治理位置
 已确认：业务配置入口采用 runner option；实现核心采用 session service decorator。
 
-建议 API 形态：
+已确认 API 形态：
 ```go
-runner.WithSessionMultimodalExternalization(sessionmm.Config{
+runner.WithSessionMultimodalExternalization(runner.SessionMultimodalExternalizationConfig{
     Enabled: true,
 })
 ```
+
+配置类型首期归属 `runner` 包，避免为了内部 decorator/helper 过早公开 `sessionmm` 这类实现概念包。后续如果业务明确需要绕过 runner 使用同等治理能力，再评估是否公开更底层的配置类型或包装入口。
+
+该 option 不建议设计成 `WithSessionMultimodalExternalization(true)` 这类单 bool 形式。虽然首期只有启停能力，但 Go 函数签名后续不能无损追加参数；使用 config struct 可以在不破坏调用方代码的前提下继续增加字段。
+
+Go 不支持同一个包内同名函数按参数类型重载，因此不能同时提供 `runner.WithSessionMultimodalExternalization(bool)` 和 `runner.WithSessionMultimodalExternalization(Config{...})` 两个同名函数。用 `any` / variadic 参数兼容两种入参会削弱类型约束和文档表达，不符合框架 API 的长期演进目标。
 
 治理真正发生的位置：
 ```text
@@ -410,9 +516,29 @@ runner / adapter / direct caller
     - concrete DB backend 不需要理解 artifact、hydrate、开关和失败语义。
     - runner option 只负责装配 decorator 和传递配置，不承载具体治理逻辑。
 
-如果业务绕过 runner 自行持有 session service，应提供独立 constructor/decorator，使业务可以显式包装自己的 session service。
+首期不默认对框架外开放手动包装 constructor/decorator。若后续业务明确存在绕过 runner、自行持有 session service 且需要同等治理的诉求，再评估是否公开受控包装入口。
 
-### 11.3 阈值能力
+### 11.3 配置演进策略
+框架迭代需要避免“首期能用，但未来一扩展就断崖式改 API”。因此首期配置面按可扩展配置对象设计，而不是按当前最小字段设计。
+
+已确认：首期就使用 config struct，哪怕当前只有 `Enabled` 字段，也不使用单 bool option。
+
+演进原则：
+- public option 保持稳定：首期暴露一个 runner option，后续优先通过给 config struct 增加字段扩展能力。
+- 零值兼容：新增字段的零值必须等价于首期默认行为，避免业务升级后行为漂移。
+- 枚举优先：hydrate 策略、失败策略、阈值策略等未来能力如果需要配置，优先使用命名枚举/策略结构，而不是堆叠多个含义相近的 bool。
+- 内外分层：public config 只表达业务可理解的治理策略；内部 decorator/helper 可以有更细的私有 config，不把内部实现细节过早暴露。
+- 能力延后公开：without-hydrate、fail open、阈值、统计、手动 hydrate 等能力先保留扩展位，只有业务明确需要时再公开。
+
+可预留的未来字段方向：
+- `ThresholdPolicy`：按大小、内容类型或 data URL 长度决定是否外存。
+- `HydrateMode`：默认 hydrate、without-hydrate、lazy hydrate 等读取策略。
+- `FailureMode`：fail closed / fail open 等失败策略。
+- `Metrics` / `Observer`：治理统计和诊断扩展点。
+
+首期只需要实现 `Enabled` 及必要的内部依赖校验，不提前实现上述策略。
+
+### 11.4 阈值能力
 已确认：A 包首期不实现阈值治理。
 
 设计要求：
@@ -466,9 +592,9 @@ runner / adapter / direct caller
     - 已保存成功的 artifact 首期允许成为短期 orphan。
 - cleanup 语义：
     - cleanup 指失败后尝试删除本次已保存成功、但未被 event 引用的 artifact。
-    - 首期 cleanup 不作为正确性依赖。
-    - 可不做，或仅在成本很低时做 best-effort cleanup。
-    - cleanup 失败不能覆盖原始保存错误。
+    - 如果 event 最终无法追加，应提交对应 artifact 的 best-effort 删除请求。
+    - cleanup 不作为写入正确性的依赖。
+    - cleanup 失败不能覆盖原始保存或 append 错误。
     - 每个 part 使用独立 filename，避免 cleanup 删除同一 filename 下其他有效版本。
 
 ### 12.3 hydrate 失败
@@ -522,12 +648,13 @@ hydrate 失败必须显式返回错误，不能把内容静默当成空内容。
     - 治理关闭时保持现有 inline 行为。
 - ref 表达：
     - persisted event 使用统一 internal ref/metadata，不把 `artifact://` 写入 provider URL/file id 字段。
-    - artifact name 符合 `sessionpart_<uuid>_<sha256-16>.<ext>`。
+    - artifact name 符合 `sessionpart_<unix-ms>_<sha256-16>_<uuid>.<ext>`。
     - 缺省 `schema_version` 的 `ContentRef` 被识别为 v1。
 - 对象与失败：
     - 未命中治理规则时不强制 clone event。
     - 命中治理规则时 runtime event 不被修改。
     - artifact save 失败不产生损坏 event。
+    - event append 失败后，对本次已保存成功的 artifact 提交 best-effort 删除请求。
     - hydrate 失败返回明确错误。
     - provider adapter 前存在 unresolved internal ref 时返回明确错误。
 
