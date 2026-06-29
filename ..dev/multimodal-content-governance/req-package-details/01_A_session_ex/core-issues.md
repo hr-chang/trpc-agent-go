@@ -12,10 +12,11 @@
 已确认：
 - 命名格式：
     ```text
-    sessionpart_<uuid>_<sha256-16>.<ext>
+    sessionpart_<unix-ms>_<sha256-16>_<uuid>.<ext>
     ```
+- `unix-ms`：治理层生成 artifact name 时的 Unix millisecond timestamp，用于排序和排查。
+- `sha256-16`：内容 sha256 的前 16 位，用于调试、弱校验和离线过滤，不承担唯一性主责。
 - `uuid`：由治理层通过 `uuid.NewString()` 生成，作为 artifact object id。
-- `sha256-16`：内容 sha256 的前 16 位，用于调试和弱校验，不承担唯一性主责。
 - `ext`：只用于可读性，真实恢复依赖 metadata 中的 mime type / format。
 - owner 信息：event ID、request ID、message index、part index 等放 metadata，不进入 filename。
 
@@ -25,12 +26,14 @@
 ### 2.2 Hydrate 时机
 已确认：
 - A 包首期 `GetSession` 默认 hydrate，保持业务可见行为与历史 inline session 一致。
+- hydrate 路径采用 copy-on-write，只影响返回给调用方的 hydrated view，不污染 persisted view。
 - session persisted view 中可以保存 internal artifact ref。
 - provider adapter 前不允许存在 unresolved internal artifact ref。
 - 模型请求构造层必须 hydrate 或显式转换 internal ref。
 
 后续优化：
 - without-hydrate / persisted view / lazy hydrate 读取入口。
+- hydrate API 是否对框架外公开。
 - 前端回放、调试、评测按需 hydrate。
 - provider file upload 和 provider file id 缓存。
 
@@ -141,7 +144,7 @@ sessionevt_<event-key>_msg_<msg-index>_part_<part-index>_<sha256-prefix>.<ext>
 #### opaque generated id
 示例：
 ```text
-sessionpart_<uuid>_<sha256-16>.<ext>
+sessionpart_<unix-ms>_<sha256-16>_<uuid>.<ext>
 ```
 
 判断：
@@ -153,15 +156,19 @@ sessionpart_<uuid>_<sha256-16>.<ext>
 ### 4.4 当前命名规则
 最终格式：
 ```text
-sessionpart_<uuid>_<sha256-16>.<ext>
+sessionpart_<unix-ms>_<sha256-16>_<uuid>.<ext>
 ```
 
 配套规则：
+- timestamp 使用治理层生成 artifact name 时的 Unix millisecond timestamp。
 - filename 不包含 `/`。
 - 不使用用户原始文件名作为唯一键。
 - 原始文件名只放 metadata。
 - 完整 sha256 放 metadata。
 - name 中 sha256 前缀采用 16 hex chars。
+- hash 放在 uuid 前面，利于人眼扫描和离线过滤。
+- 当前 artifact API 主要按完整 filename 读取，hash 前移不会直接带来在线查询能力。
+- 首期更看重按时间排序和排查，因此采用 `unix-ms` 在前、hash 在中、uuid 在后的顺序。
 - ext 只用于可读性，恢复以 metadata 为准。
 - persisted ref 必须 pin version：`artifact://<name>@<version>`。
 - event ID、request ID、message index、part index 等 owner 信息放 metadata。
@@ -229,11 +236,12 @@ OpenAI provider request 接受 provider 可消费字段：
 判断：
 - 推荐作为内部基础能力。
 - `GetSession` 默认 hydrate 可以复用该能力。
-- 是否公开给业务后置决策。
+- 首期不对框架外公开，但应放在可测试的内部 helper 中，供 `GetSession` 和模型请求构造链路复用；后续业务明确有需求时再评估公开 API。
 
 ### 5.4 当前 hydrate 规则
 首期规则：
 - `GetSession` 默认 hydrate，保持业务可见行为与历史 inline session 一致。
+- hydrate 路径采用 copy-on-write，不把 bytes 写回 persisted event。
 - 模型请求构造前必须 hydrate 或显式转换 internal ref。
 - provider adapter 前发现 unresolved internal ref 时返回明确错误。
 - hydrate 失败必须返回明确错误，不能静默丢内容。
@@ -247,14 +255,17 @@ OpenAI provider request 接受 provider 可消费字段：
 
 ## 6. 最终结论
 建议初版收敛为：
-- artifact 命名采用 `sessionpart_<uuid>_<sha256-16>.<ext>`。
+- artifact 命名采用 `sessionpart_<unix-ms>_<sha256-16>_<uuid>.<ext>`。
 - artifact ref 使用 `artifact://<name>@<version>`，必须 pin version。
+- `ContentRef` 在 `model.ContentPart` 上以明确统一字段承载，不分散写入 `Image`、`Audio`、`File` 各自结构。
 - `ContentRef` 首期不强制加 `schema_version`，缺省版本即 v1。
 - `GetSession` 默认 hydrate，保持业务可见行为与历史 inline session 一致。
+- hydrate 路径采用 copy-on-write，不把 bytes 写回 persisted event。
 - 模型请求构造前必须 hydrate 或显式转换 internal ref。
+- hydrate helper 首期仅作为框架内部可测试能力，不对框架外公开。
 - 首期不做 provider 上传和 provider file id 缓存。
 
 建议后续优化：
 - without-hydrate / persisted view / lazy hydrate 读取入口。
-- hydrate helper 的 public/internal 边界。
+- hydrate helper 的 public/internal 边界，如业务明确需要手动 hydrate 再评估公开。
 - orphan artifact 的反引用索引和自动清理。

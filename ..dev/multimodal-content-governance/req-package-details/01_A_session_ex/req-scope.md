@@ -68,15 +68,20 @@
 默认策略：
 - 默认关闭：旧版本升级业务不应在未配置 artifact 和治理开关时自动改变行为。
 - 配置入口：业务配置入口采用 runner option。
+- 配置归属：首期对外配置类型归属 `runner` 包，不为了内部治理实现过早公开独立配置包。
+- 配置演进：首期使用 config struct，哪怕当前只有 `Enabled` 字段，也不使用单 bool option，避免未来扩展时破坏 API。
 - 实现核心：实现核心采用 session service decorator，治理发生在 `AppendEvent` 进入具体 backend 前。
 - 读取兼容：A 包首期 `GetSession` 默认 hydrate，保持业务可见行为与历史 inline session 一致；未来再提供 without-hydrate 优化入口。
+- 读取视图：hydrate 采用 copy-on-write，只影响返回给调用方的 session view，不把 bytes 写回 persisted event。
 
 引用表达：
 - 统一表达：persisted event 采用统一 internal ref/metadata，不把 `artifact://` 默认塞进 provider URL / provider file id 字段。
+- 承载方式：在 `model.ContentPart` 上增加明确的统一 `ContentRef` 字段，不分散放入 `Image`、`Audio`、`File` 各自结构。
 - 版本语义：首期 `ContentRef` 不强制加 `schema_version`，缺省版本即 v1。
-- 命名规则：artifact name 采用 `sessionpart_<uuid>_<sha256-16>.<ext>`；`uuid` 由治理层通过 `uuid.NewString()` 生成，owner 信息放 metadata。
+- 命名规则：artifact name 采用 `sessionpart_<unix-ms>_<sha256-16>_<uuid>.<ext>`；`uuid` 由治理层通过 `uuid.NewString()` 生成，owner 信息放 metadata。
 - provider 边界：`session.Events` 可以保存 internal artifact ref；进入 provider adapter 前，不允许存在 unresolved internal artifact ref。
 - 请求构造：模型请求构造层必须完成 hydrate 或显式转换，失败则返回错误。
+- API 边界：hydrate helper 首期仅作为框架内部能力，不对框架外公开，但需要放在可测试的内部 helper 中，供框架内部链路复用和单测覆盖。
 
 ## 5. 非目标
 其他存储面：
@@ -111,7 +116,7 @@
 - 治理开启但 artifact service 不可用时，不能静默丢内容。
 - artifact 保存失败时，不能写入“bytes 已清空但 ref 不可用”的损坏 event。
 - 结合仓库现有 artifact 调用惯例，默认倾向 fail closed：返回错误，不追加损坏 event。
-- 多 part 保存时，若部分 artifact 已保存但 event 最终未追加，首期接受短期 orphan artifact；cleanup 不作为写入正确性的依赖。
+- 多 part 保存时，若部分 artifact 已保存但 event 最终未追加，首期接受短期 orphan artifact；应提交对应 artifact 的 best-effort 删除请求，但 cleanup 不作为写入正确性的依赖。
 
 ## 7. 推迟到未来迭代的事项
 以下事项已纳入整体规划，但不作为 A 包首期交付范围。
@@ -119,11 +124,12 @@
 策略优化：
 - 小对象阈值策略：首期不做按大小、类型或 data URL 长度的阈值判断；仅保留未来扩展空间。
 - hydrate 性能优化：首期不提供 without-hydrate 读取入口；未来可增加 persisted view / lazy hydrate / message-event 粒度优化。
+- hydrate API 公开：首期不对框架外公开 hydrate API；后续业务明确需要时再评估。
 - provider 文件优化：首期不做 hydrate 后异步上传 provider，也不缓存 provider file id。
 
 生命周期治理：
 - 完整 artifact 生命周期：首期不做完整 GC、权限、审计、加密、脱敏和生命周期绑定。
-- orphan artifact 治理：首期接受短期 orphan artifact；不做完整 orphan 判定、反引用索引或自动清理任务。
+- orphan artifact 治理：首期接受短期 orphan artifact；不做完整 orphan 判定、反引用索引或后台自动清理任务。
 - 历史数据迁移工具：首期不提供历史 inline session 的批量迁移工具，只保证历史读取和继续对话兼容。
 
 运行策略与观测：
