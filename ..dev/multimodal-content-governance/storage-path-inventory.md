@@ -39,7 +39,7 @@
 | Callback / Tool / CodeExecutor / Skill 输出 | `artifact.Artifact`、workspace 文件、artifact ref | artifact / file / tool result | artifact、`session.Events`、workspace metadata | 中 | P1 |
 | Workspace conversation-file dereference | inline data、host path、artifact ref、provider file ID | workspace file bytes | workspace filesystem、provider downloader、artifact | 中-高 | P1 |
 | Model / Provider 响应 | 文本、tool call、未来文件/图片 | `model.Response` / `model.Message` | `session.Events`、telemetry、debuglog | 中 | P1/P2 |
-| Graph State / Interrupt 输入 | graph state、resume payload | `graph.State` / checkpoint payload | checkpoint、session state | 中-高 | P2 |
+| Graph State / Interrupt 输入 | graph state、resume payload | `graph.State` / checkpoint payload | checkpoint、session state | 中-高 | P1 |
 
 ## 4. 分入口存储路径
 ### 4.1 用户消息入口
@@ -83,7 +83,7 @@
 | `session.Events` | 高 | event JSON 会保存完整 `ContentParts`，`[]byte` 变 base64 | P0，主治理点 |
 | telemetry / Langfuse | 高 | request/messages/response span 属性可能外发 base64 | P1，观测治理 |
 | debuglog / ExecutionTrace | 高 | snapshot 可能直接 marshal request/response/event | P1，调试治理 |
-| graph checkpoint | 中-高 | graph state 若含 messages，会复制多模态 | P2，checkpoint 治理 |
+| graph checkpoint | 中-高 | graph state 若含 messages，会复制多模态 | P1，checkpoint / HITL payload 治理 |
 | eval recorder / evalset | 高 | 录制完整 `model.Message` | P2，评测资产治理 |
 
 链路终止点：
@@ -595,7 +595,7 @@ Callback / Tool / Workspace / CodeExecutor / Skill output
 主要存储点：
 | 存储点 | 风险 | 原因 | 治理判断 |
 |---|---|---|---|
-| workspace filesystem | 中 | 临时或 per-session 文件，可能保存大对象 | P2，生命周期治理 |
+| workspace filesystem | 中 | 临时或 per-session 文件，可能保存大对象 | P1，workspace / sandbox / skill 产物治理 |
 | artifact.Service | 中 | 目标承载层，保存 bytes | P0，定义契约 |
 | `session.Events` | 中 | 如果 result 中内联文件内容，会进入 event | P1 |
 
@@ -712,7 +712,7 @@ Graph runtime state
 主要存储点：
 | 存储点 | 风险 | 原因 | 治理判断 |
 |---|---|---|---|
-| graph checkpoint | 中-高 | checkpoint JSON 可能保存完整 messages/state | P2 |
+| graph checkpoint | 中-高 | checkpoint JSON 可能保存完整 messages/state | P1 |
 | `session.Events` | 中-高 | graph output 仍可能进入主事件 | P0/P1 |
 
 链路终止点：
@@ -790,7 +790,7 @@ Direct session/track/state API
 |---|---|---|---|
 | `session.Events` | 中-高 | 可绕过 runner 直接写入含 `ContentParts` 的 event | P1，文档约束和必要防护 |
 | `session.Tracks` | 中-高 | `TrackEvent.Payload` 是通用 JSON，可能直接放 data URL/base64 | P1 |
-| `session.State` / app/user state | 中-高 | `StateMap` 是 `map[string][]byte`，天然可承载大对象 | P2 |
+| `session.State` / app/user state | 中-高 | `StateMap` 是 `map[string][]byte`，天然可承载大对象 | P1/P2 |
 
 链路终止点：
 - session backend。
@@ -809,9 +809,9 @@ Direct session/track/state API
 |---|---|---|---|---|---|
 | `session.Events` | 用户消息、seed history、rewriter、AG-UI、OpenAI-compatible、A2A、OpenClaw、tool result、ClaudeCode Read、MCP image、OpenClaw MEDIA、model response、graph output、direct append | 是 | 长期/半长期对话状态 | artifact ref + metadata + hydrate | P0 |
 | `session.Tracks` | AG-UI input、AG-UI translator | 是 | 协议回放存储 | track payload 引用化，MessagesSnapshot 返回引用 | P0/P1 |
-| `session.State` / `StateDelta` | graph、tool、skill、A2A state delta、direct update、业务扩展 | 可能 | 会话 KV 状态 | 作为链路落点治理，框架内部 state 优先 ref | P2 |
+| `session.State` / `StateDelta` | graph、tool、skill、A2A state delta、direct update、业务扩展 | 可能 | 会话 KV 状态 | 作为链路落点治理，框架内部 state 优先 ref | P1/P2 |
 | `app/user state` | 业务扩展、memory/skill 游标 | 可能 | app/user KV 状态 | 文档约束和大小限制 | P2 |
-| graph checkpoint | graph state、interrupt、pending writes | 可能 | 图执行恢复存储 | checkpoint 前引用化/摘要化 | P2 |
+| graph checkpoint | graph state、interrupt、pending writes | 可能 | 图执行恢复存储 | checkpoint 前引用化/摘要化 | P1 |
 | telemetry / OTLP | user/model/tool request-response | 是 | 外部观测导出 | drop/omit/truncate/ref，默认策略收紧 | P1 |
 | Langfuse | OTEL messages/observation | 是 | 外部观测平台 | leaf 截断，blob 禁止或引用化 | P1 |
 | debuglog | request/response/event snapshot | 是 | 调试日志 | 默认关闭，snapshot 引用化或截断 | P1 |
@@ -820,7 +820,7 @@ Direct session/track/state API
 | eval result / benchmark output | evaluation result | 可能 | 结果文件/DB | 不保存 raw message，保存 hash/ref | P2 |
 | OpenClaw uploads | OpenClaw gateway | 是 | 应用侧文件库 | 生命周期、权限、与 session ref 对齐 | P1 |
 | OpenClaw debug recorder | OpenClaw gateway/model/runner/MCP result | 是 | 调试文件/attachments | safe mode、短 retention、权限隔离 | P1 |
-| workspace filesystem | codeexecutor/skill、workspace dereference | 是 | 临时或 per-session 文件系统 | cleanup、产物转 artifact | P2 |
+| workspace filesystem | codeexecutor/skill、workspace dereference | 是 | 临时或 per-session 文件系统 | cleanup、产物转 artifact | P1 |
 | artifact.Service | 多入口治理结果、callback/tool/codeexecutor/skill output | 是 | 目标大对象层 | 内容本体、版本、元信息、生命周期 | P0 |
 | memory store | memory extractor/offload | 通常否，可能间接 | 文本 memory / external offload | extractor text-only，offload 契约 ref-only | P2 |
 | pgvector/text index | session pgvector | event 列是，索引列通常否 | event JSON + 文本索引 | 治理 event 列，保持索引 text-only | P1/P2 |

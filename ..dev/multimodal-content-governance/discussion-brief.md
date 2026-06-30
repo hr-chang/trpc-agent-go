@@ -84,25 +84,24 @@
 ## 8. 后续需求拆分建议
 优先级分层只表达重要性，不直接等同于需求拆分。
 
-P0 核心主路径：
-- 用户消息、seed history、rewriter、AG-UI/A2A 输入进入 `session.Events` 的路径。
-- `session.Events` 中 inline 多模态内容的持久化视图治理。
+已完成基线：
+- `session.Events` 中标准 `ContentParts` inline 多模态内容的持久化视图治理。
 - artifact 引用和元信息契约。
 - session replay / hydrate 能力。
 - runtime view 与 persisted view 分离。
 
-P1 框架重点路径：
-- AG-UI track 多模态 payload。
-- OpenAI-compatible data URL、A2A 远端响应、非 session 注入消息、ClaudeCode Read、MCP image result。
-- OpenClaw URL fetch、MEDIA tool-result media、workspace dereference。
-- callback/tool/codeexecutor/skill 产物与 artifact 的协同。
-- telemetry/debuglog 中明确复制多模态的路径。
+下一阶段重点：
+- Tool Result / Execution Output 表示治理。
+- Telemetry / Debuglog / ExecutionTrace 默认止血。
+- Graph Checkpoint / State / HITL Payload 泄漏守护。
+- Workspace / Sandbox / Skill 文件产物治理。
+- AG-UI / Client Replay 多模态治理。
 
-P2 后续治理扩展：
-- graph checkpoint 深度治理。
-- state/state delta 大对象治理。
+后续扩展：
+- 观测调试引用化展示与受控 hydrate。
 - evaluation recorder / evalset / eval result 治理。
 - 历史数据迁移工具。
+- Provider Attachment Request Optimization。
 - 完整 GC、审计、权限、加密、脱敏能力。
 
 ## 9. 需后续具体需求确认
@@ -110,7 +109,7 @@ P2 后续治理扩展：
 - 业务方自存引用需要保存哪些元信息，以及字段位置。
 - artifact 引用字段具体形式。
 - artifact 生命周期与 session/user/app 生命周期的默认关系。
-- telemetry/debuglog 的治理策略是引用化、截断、omit、drop，还是 debug 模式 opt-in 保存。
+- telemetry/debuglog 的默认止血策略，以及后续引用化展示与受控 hydrate 边界。
 - checkpoint 中哪些状态必须完整可恢复，哪些可以只保存摘要或引用。
-- AG-UI track、evaluation recorder/evalset 是否进入第一期。
+- client replay、evaluation recorder/evalset 是否进入下一阶段。
 - `StateMap` 是否需要大小阈值、key 策略、文档约束或框架内部写入约束。
