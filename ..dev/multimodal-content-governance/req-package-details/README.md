@@ -13,13 +13,15 @@
     - [`01_A_session_ex/req-scope.md`](./01_A_session_ex/req-scope.md)
     - [`01_A_session_ex/tech-design.md`](./01_A_session_ex/tech-design.md)
     - [`01_A_session_ex/core-issues.md`](./01_A_session_ex/core-issues.md)
-- [`02_B_agui_track.md`](./02_B_agui_track.md)：需求包 B，AG-UI Track 多模态治理。
-- [`03_C_tool_result.md`](./03_C_tool_result.md)：需求包 C，Tool Result Inline Blob 与结果表示治理。
-- [`04_D_workspace.md`](./04_D_workspace.md)：需求包 D，Workspace Dereference 与临时文件治理。
-- [`05_E_observability.md`](./05_E_observability.md)：需求包 E，Telemetry / Debuglog / ExecutionTrace 治理。
-- [`06_F_checkpoint_state.md`](./06_F_checkpoint_state.md)：需求包 F，Checkpoint 与 State 泄漏守护。
-- [`07_G_eval.md`](./07_G_eval.md)：需求包 G，Evaluation / EvalSet 治理。
-- [`08_H_migration.md`](./08_H_migration.md)：需求包 H，历史数据迁移工具。
+- [`02_B_client_replay.md`](./02_B_client_replay.md)：需求包 B，AG-UI / Client Replay 多模态治理。
+- [`03_C_tool_output.md`](./03_C_tool_output.md)：需求包 C，Tool Result / Execution Output 表示治理。
+- [`04_D_workspace_outputs.md`](./04_D_workspace_outputs.md)：需求包 D，Workspace / Sandbox / Skill 文件产物治理。
+- [`05_E1_observe_stopgap.md`](./05_E1_observe_stopgap.md)：需求包 E1，Telemetry / Debuglog / ExecutionTrace 默认止血。
+- [`06_E2_observe_refs.md`](./06_E2_observe_refs.md)：需求包 E2，观测调试引用化展示与受控 Hydrate。
+- [`07_F_graph_state_hitl.md`](./07_F_graph_state_hitl.md)：需求包 F，Graph Checkpoint / State / HITL Payload 泄漏守护。
+- [`08_G_eval.md`](./08_G_eval.md)：需求包 G，Evaluation / EvalSet 治理。
+- [`09_H_migration.md`](./09_H_migration.md)：需求包 H，历史数据迁移工具。
+- [`10_I_provider_attach.md`](./10_I_provider_attach.md)：需求包 I，Provider Attachment Request Optimization。
 
 ## 通用技术约定
 ### 运行时视图与持久化视图

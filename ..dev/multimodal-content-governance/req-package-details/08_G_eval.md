@@ -20,3 +20,4 @@
     - 摘要。
     - 受控 hydrate。
 - 如果复用 telemetry/debuglog 的截断/摘要策略，需要保证不破坏评测语义。
+- G 可以复用 E1 的默认止血策略，也可以在 E2 之后接入受控 hydrate。
