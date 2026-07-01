@@ -1,4 +1,4 @@
-# 技术设计：Session 多模态外存最小闭环
+# 技术设计：Session 内容外存最小闭环
 
 ## 1. 文档定位
 本文是需求包 A 的执行技术方案，配套需求范围见 `req-scope.md`。
@@ -40,7 +40,7 @@
 
 ## 4. 设计原则
 ### 4.1 统一治理，不下沉到 DB backend
-治理逻辑应位于 session backend 之上。DB backend 只负责保存已经治理过的 event payload，不关心多模态外存细节。
+治理逻辑应位于 session backend 之上。DB backend 只负责保存已经治理过的 event payload，不关心内容外存细节。
 
 ### 4.2 runtime view 与 persisted view 分离
 - runtime view 保留当前运行需要的原始内容。
@@ -170,26 +170,24 @@ A 不按来源区分是否业务自定义。只要进入 `session.Events` 的内
 A 包首期把治理逻辑落在两个明确位置。
 
 #### 装配位置
-基于现有代码，治理能力应在 runner 构造期装配，而不是改每一个 `AppendEvent` / `GetSession` 调用点。
+基于现有代码，治理能力应通过公开的 `session.Service` wrapper 装配，而不是改每一个 `AppendEvent` / `GetSession` 调用点。
 
-现有装配点：
-- `runner.NewRunner`：
-    - 当前会解析 `options.sessionService`。
-    - 如果未配置，则创建 `inmemory.NewSessionService()`。
-    - 随后把 `options.sessionService` 赋值给 `runner.sessionService`。
-- `runner.NewRunnerWithAgentFactory`：
-    - 具有同样的 `options.sessionService` 初始化和赋值逻辑。
+装配方式：
+- 业务创建底层 session backend。
+- 业务调用 `session/externalization.Wrap` 得到 governed session service。
+- 业务通过 `runner.WithSessionService` 传入 governed session service。
 
-建议插入：
-```text
-options := newOptions(opts...)
-ensure options.sessionService
-if session multimodal externalization enabled:
-  options.sessionService = sessionmm.Wrap(options.sessionService, cfg, artifactService)
-runner.sessionService = options.sessionService
+建议写法：
+```go
+governedSessionService := externalization.Wrap(
+    sessionService,
+    artifactService,
+    externalization.Config{Enabled: true},
+)
+runner.WithSessionService(governedSessionService)
 ```
 
-这样 runner 内现有所有 `r.sessionService.AppendEvent(...)` 和 `r.sessionService.GetSession(...)` 调用都能复用同一治理逻辑。`newRunInvocation` 也会把包装后的 `r.sessionService` 注入到 invocation，因此 agent/tool 内部通过 invocation 访问 session service 时也能走同一层治理。
+这样 runner 内现有所有 `r.sessionService.AppendEvent(...)` 和 `r.sessionService.GetSession(...)` 调用都能复用同一治理逻辑。`newRunInvocation` 也会把 governed `r.sessionService` 注入到 invocation，因此 agent/tool/callback 内部通过 invocation 访问 session service 时也能走同一层治理。业务若在 runner 外直接调用 `AppendEvent`，也应复用这份 governed service，而不是 raw backend。
 
 #### 实现点一：外存点
 位置：
@@ -285,8 +283,8 @@ artifact://<name>@<version>
     - `sha256`。
     - `from_data_url`。
 - owner 字段：
-    - `event_key`。
-    - `message_index`。
+    - `event_id`。
+    - `choice_index`。
     - `part_index`。
     - `request_id`。
 - provider 辅助字段：
@@ -448,7 +446,7 @@ sessionpart_<unix-ms>_<sha256-16>_<uuid>.<ext>
     - `sha256-16` 是内容 sha256 的前 16 位，用于调试、弱校验和离线过滤，不承担唯一性主责。
     - `ext` 只用于可读性，真实恢复依赖 metadata 中的 mime type / format。
 - owner 信息：
-    - `event_key`、`request_id`、`message_index`、`part_index` 等 owner 信息放 metadata，不塞进 filename。
+    - `event_id`、`request_id`、`choice_index`、`part_index` 等 owner 信息放 metadata，不塞进 filename。
 
 关于 hash 位置：
 - 相比 `sessionpart_<uuid>_<sha256-16>.<ext>`，把 hash 放到 uuid 前面更利于人眼扫描和离线过滤。
@@ -471,7 +469,7 @@ sessionpart_<unix-ms>_<sha256-16>_<uuid>.<ext>
 
 ## 11. 开关与阈值扩展
 ### 11.1 默认开关
-已确认：多模态外存默认关闭。
+已确认：内容外存默认关闭。
 
 原因：
 - 旧版本升级业务默认没有该能力，不应自动改变落盘行为。
@@ -479,31 +477,33 @@ sessionpart_<unix-ms>_<sha256-16>_<uuid>.<ext>
 - 默认关闭能降低框架升级风险，避免未配置 artifact 时引入新错误路径。
 
 生效条件：
-- 业务显式开启 session 多模态外存。
+- 业务显式开启 session 内容外存。
 - runner/session 治理层能拿到可用 `artifact.Service`。
 - 当前 event 中存在标准 `ContentParts` inline 多模态内容。
 
 ### 11.2 配置入口与治理位置
-已确认：业务配置入口采用 runner option；实现核心采用 session service decorator。
+已确认：业务配置入口采用公开 `session/externalization.Wrap`；实现核心采用 session service decorator。runner 不需要理解内容外存，只消费业务传入的最终 `session.Service`。
 
 已确认 API 形态：
 ```go
-runner.WithSessionMultimodalExternalization(runner.SessionMultimodalExternalizationConfig{
-    Enabled: true,
-})
+governedSessionService := externalization.Wrap(
+    sessionService,
+    artifactService,
+    externalization.Config{Enabled: true},
+)
 ```
 
-配置类型首期归属 `runner` 包，避免为了内部 decorator/helper 过早公开 `sessionmm` 这类实现概念包。后续如果业务明确需要绕过 runner 使用同等治理能力，再评估是否公开更底层的配置类型或包装入口。
+配置类型首期归属 `session/externalization` 包，因为治理边界是 `session.Service`，不是 runner 专属流程。这样 callback/tool/plugin 与业务直接 `AppendEvent` 只要共享同一个 governed service，就能保持一致语义。
 
-该 option 不建议设计成 `WithSessionMultimodalExternalization(true)` 这类单 bool 形式。虽然首期只有启停能力，但 Go 函数签名后续不能无损追加参数；使用 config struct 可以在不破坏调用方代码的前提下继续增加字段。
+该入口不建议设计成 `Wrap(..., true)` 这类单 bool 形式。虽然首期只有启停能力，但 Go 函数签名后续不能无损追加参数；使用 config struct 可以在不破坏调用方代码的前提下继续增加字段。
 
-Go 不支持同一个包内同名函数按参数类型重载，因此不能同时提供 `runner.WithSessionMultimodalExternalization(bool)` 和 `runner.WithSessionMultimodalExternalization(Config{...})` 两个同名函数。用 `any` / variadic 参数兼容两种入参会削弱类型约束和文档表达，不符合框架 API 的长期演进目标。
+Go 不支持同一个包内同名函数按参数类型重载，因此不能同时提供 `Wrap(..., bool)` 和 `Wrap(..., Config{...})` 两种同名形态。用 `any` / variadic 参数兼容两种入参会削弱类型约束和文档表达，不符合框架 API 的长期演进目标。
 
 治理真正发生的位置：
 ```text
 runner / adapter / direct caller
   -> session.Service.AppendEvent
-  -> session multimodal governance decorator
+  -> session content externalization decorator
   -> concrete session backend
 ```
 
@@ -514,9 +514,9 @@ runner / adapter / direct caller
     - 业务直接调用 `session.Service.AppendEvent` 时，只要使用被包装的 service，也能获得一致治理。
 - 职责清晰：
     - concrete DB backend 不需要理解 artifact、hydrate、开关和失败语义。
-    - runner option 只负责装配 decorator 和传递配置，不承载具体治理逻辑。
+    - 公开 wrapper 只负责装配 decorator 和传递配置，不承载具体治理逻辑。
 
-首期不默认对框架外开放手动包装 constructor/decorator。若后续业务明确存在绕过 runner、自行持有 session service 且需要同等治理的诉求，再评估是否公开受控包装入口。
+首期对框架外开放受控包装入口 `session/externalization.Wrap`。业务侧只需要在创建 session service 时替换成 governed service，runner 内外共享同一写入/读取语义。
 
 ### 11.3 配置演进策略
 框架迭代需要避免“首期能用，但未来一扩展就断崖式改 API”。因此首期配置面按可扩展配置对象设计，而不是按当前最小字段设计。
@@ -524,7 +524,7 @@ runner / adapter / direct caller
 已确认：首期就使用 config struct，哪怕当前只有 `Enabled` 字段，也不使用单 bool option。
 
 演进原则：
-- public option 保持稳定：首期暴露一个 runner option，后续优先通过给 config struct 增加字段扩展能力。
+- public wrapper 保持稳定：首期暴露 `session/externalization.Wrap` 和 config struct，后续优先通过给 config struct 增加字段扩展能力。
 - 零值兼容：新增字段的零值必须等价于首期默认行为，避免业务升级后行为漂移。
 - 枚举优先：hydrate 策略、失败策略、阈值策略等未来能力如果需要配置，优先使用命名枚举/策略结构，而不是堆叠多个含义相近的 bool。
 - 内外分层：public config 只表达业务可理解的治理策略；内部 decorator/helper 可以有更细的私有 config，不把内部实现细节过早暴露。

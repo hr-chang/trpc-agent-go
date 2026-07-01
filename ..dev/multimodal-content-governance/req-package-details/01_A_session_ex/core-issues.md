@@ -45,7 +45,7 @@
 - A 包不递归扫描 tool result JSON、业务自定义 JSON/string/metadata、`StateMap`。
 
 默认策略：
-- 多模态外存默认关闭，业务需要显式开启并配置 artifact 能力。
+- 内容外存默认关闭，业务需要显式开启并配置 artifact 能力。
 - artifact 保存失败默认 fail closed。
 - 首期不提供 fail open 兼容开关。
 - 首期 `ContentRef` 不强制加 `schema_version`，缺省版本即 v1。
@@ -107,7 +107,7 @@ OpenAI 使用 provider 侧 opaque id：
 #### 固定 filename + version
 示例：
 ```text
-session_multimodal
+session_externalization
 ```
 
 判断：

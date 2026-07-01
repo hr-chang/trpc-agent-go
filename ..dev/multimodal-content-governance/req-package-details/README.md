@@ -9,7 +9,7 @@
 - `../storage-path-inventory.md`：完整入口到存储路径盘点，本目录只提取和需求包直接相关的技术细节。
 
 ## 文件列表
-- 需求包 A：Session 多模态外存最小闭环。
+- 需求包 A：Session 内容外存最小闭环。
     - [`01_A_session_ex/req-scope.md`](./01_A_session_ex/req-scope.md)
     - [`01_A_session_ex/tech-design.md`](./01_A_session_ex/tech-design.md)
     - [`01_A_session_ex/core-issues.md`](./01_A_session_ex/core-issues.md)

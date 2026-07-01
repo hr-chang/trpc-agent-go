@@ -1,4 +1,4 @@
-# 评审与跟进日志：Session 多模态外存最小闭环
+# 评审与跟进日志：Session 内容外存最小闭环
 
 ## 0. 使用约定
 本文记录 A 包实现至今，仍需修改、或至少应「确认是否修改并给出回应/记录」的事项，并作为后续持续追加的跟踪日志。
@@ -23,7 +23,7 @@
 - 建议：作为框架底层能力，补齐核心分支单测以过门禁；用例清单见 `test-plan.md` 第 11 节缺口部分。
 - 讨论与回应：
     - 2026-06-29 评审: 列为优先确认项，需决定是否在本 PR 内补齐。
-    - 2026-06-29 研发: 已补充 audio/file 外存与 hydrate、base64/非 base64 data URL、混合历史 session、artifact ref 错误分支、runner option/装配路径等测试；聚焦测试通过。
+    - 2026-06-29 研发: 已补充 audio/file 外存与 hydrate、base64/非 base64 data URL、混合历史 session、artifact ref 错误分支、wrapper/装配路径等测试；聚焦测试通过。
     - 2026-06-29 评审: 复核后覆盖率仍未达门禁，从「已修复」回退为「需迭代」。本地包级语句覆盖率约 79.1% < 85% 目标，关键空白：`service.go` 的 `searchEvents` hydrate（约 line 320）从未被调用（`searchOnlyService` 仅是 mock 定义，没有真正发起 `SearchEvents` 并断言 hydrate）；组合 wrapper 各类型的 `SearchEvents`/`GetEventWindow` 大多 0%，`GetEventWindow` 仅一种组合被命中。建议补「包装 searchable 服务 → 调 `SearchEvents` → 断言事件已 hydrate」用例后，再对照 PR 实际 codecov patch 数确认门禁。
     - 2026-06-29 研发: 已补充 `SearchEvents` 行为断言，fake 返回 `ContentRef` 事件并校验返回结果已 hydrate 且清除 `ContentRef`；同时补充 `NewRunnerWithAgentFactory` 构造路径测试。
 
@@ -37,13 +37,14 @@
     - 2026-06-29 研发: 已在 `appendObserved` 注释中明确该函数用于识别 hook 跳过 `next()`，并依赖 backend 成功 append 后回写传入 `sess.Events` 的契约；暂不扩大到外部组件集成测试。
 
 ### R-03 开启外存但未配置 artifact service 的早期校验
-- 状态：待确认
+- 状态：已调整口径
 - 分类：易用性 / 失败语义
-- 描述：`runner.wrapSessionMultimodalExternalization` 在 `Enabled=true` 且 `artifactService=nil` 时仍会包装；要到首个多模态事件 `AppendEvent` 才 fail closed 返回错误。
-- 建议：保持 fail closed，但可考虑在 `NewRunner` / `NewRunnerWithAgentFactory` 装配时对「Enabled 但无 artifact service」更早报错或告警。是否做需确认（涉及是否允许「先开开关、后配 artifact」）。
+- 描述：新方案不再由 runner 自动装配，多模态治理通过 `session/externalization.Wrap` 显式生成 governed service；若 `Enabled=true` 但 `artifactService=nil`，会在首个需要外存或 hydrate 的操作中 fail closed 返回错误。
+- 建议：保持 fail closed，不在 runner 构造期做特殊校验。公开 wrapper 的职责是提供一致治理语义，业务需要将 governed service 作为唯一 session service 使用。
 - 讨论与回应：
     - 2026-06-29 评审: 提出错误延迟到运行期的体验问题。
     - 2026-06-29 评审: 倾向「做」。在 `NewRunner` 装配时对 `Enabled && artifactService==nil` 直接返回错误，把 fail closed 从「首个多模态事件运行期」提前到「构造期」。改动小、风险低，且不影响除「先开开关、后配 artifact」外的正常用法。待决策确认后落地。
+    - 2026-06-30 研发: 架构入口调整为公开 `session/externalization.Wrap`，runner 不再理解该开关；因此不做 runner 构造期校验，继续通过 wrapper 的写入/读取路径 fail closed。
 
 ### R-04 provider adapter 前是否需要独立的 unresolved ref 防线
 - 状态：待确认 / 记录
@@ -56,7 +57,7 @@
 ### R-05 单文件过大，建议拆分
 - 状态：待办（低优先）
 - 分类：可维护性
-- 描述：`internal/session/multimodal/service.go` 单文件约 1000+ 行，混合装饰器入口、可选接口组合、externalize、hydrate、clone、命名、mime 工具。
+- 描述：`internal/session/externalization/service.go` 单文件约 1000+ 行，混合装饰器入口、可选接口组合、externalize、hydrate、clone、命名、mime 工具。
 - 建议：拆为 `service.go` / `optional.go` / `externalize.go` / `hydrate.go` / `clone.go` / `naming.go`，降低导航成本。
 - 讨论与回应：
     - 2026-06-29 评审: 低优先，不阻塞。

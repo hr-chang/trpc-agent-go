@@ -1,4 +1,4 @@
-# 测试方案与当前结论：Session 多模态外存最小闭环
+# 测试方案与当前结论：Session 内容外存最小闭环
 
 ## 1. 文档定位
 本文是需求包 A 的端到端测试方案与当前执行结论，依据 `req-scope.md` 的验收口径制定，并参考 `tech-design.md` 与 `core-issues.md` 的实现边界。
@@ -12,7 +12,7 @@
 ## 2. 被测对象与契约
 端到端契约（对外可观察行为）：
 - 装配入口：
-    - `runner.WithSessionMultimodalExternalization(runner.SessionMultimodalExternalizationConfig{Enabled: true})`。
+    - `session/externalization.Wrap(sessionService, artifactService, externalization.Config{Enabled: true})`。
 - 写入治理：
     - 开启后，标准 `ContentParts` 的 inline 多模态在落入 session backend 前被外存为引用。
 - 读取还原：
@@ -40,7 +40,7 @@
 ## 4. 测试分层与方法
 端到端分层：
 - 主链路端到端：
-    - 通过 runner option 装配 + fake model，验证写入减重、默认 hydrate、当前轮不变、继续对话。
+    - 通过 wrapped session service 装配 + fake model，验证写入减重、默认 hydrate、当前轮不变、继续对话。
 - 跨后端一致性：
     - 同一组行为在多个 session backend 上重放，验证行为一致。
 - 写入面回归：
@@ -107,7 +107,7 @@
 
 ## 7. 端到端主链路用例
 装配方式：
-- 通过 `runner.WithSessionMultimodalExternalization` 开启治理。
+- 通过 `session/externalization.Wrap` 得到 governed session service，并传入 `runner.WithSessionService`。
 - 使用记录入参的 fake model，不接真实 provider。
 
 用例：
@@ -162,7 +162,7 @@
 ## 13. 当前测试落点
 已新增端到端测试：
 - 测试模块：`test/`。
-- 测试文件：`test/session_multimodal_e2e_test.go`。
+- 测试文件：`test/session_externalization_e2e_test.go`。
 - 依赖接线：`test/go.mod` / `test/go.sum` 引入 `session/redis`、`session/mongodb`、`miniredis`，并通过本地 `replace` 指向仓库内子模块。
 
 测试夹具：
@@ -175,15 +175,15 @@
 - `inmemory` 后端：通过。
 - `redis` 后端：通过。
 - `mongodb` 真实实例：通过。
-- 新增 `TestSessionMultimodal*`：通过。
+- 新增 `TestSessionExternalization*`：通过。
 - `test` 模块完整测试：通过。
 - 新增测试 race 检查：通过。
 
 已执行命令：
-- `cd test && GOPROXY=https://proxy.golang.org,direct go test ./... -run 'TestSessionMultimodal'`
+- `cd test && GOPROXY=https://proxy.golang.org,direct go test ./... -run 'TestSessionExternalization'`
 - `cd test && GOPROXY=https://proxy.golang.org,direct go test ./...`
-- `cd test && GOPROXY=https://proxy.golang.org,direct go test -race ./... -run 'TestSessionMultimodal'`
-- `cd test && MONGO_TEST_URI=... GOPROXY=https://proxy.golang.org,direct go test ./... -run 'TestSessionMultimodal' -count=1`
+- `cd test && GOPROXY=https://proxy.golang.org,direct go test -race ./... -run 'TestSessionExternalization'`
+- `cd test && MONGO_TEST_URI=... GOPROXY=https://proxy.golang.org,direct go test ./... -run 'TestSessionExternalization' -count=1`
 
 覆盖到的端到端行为：
 - 开启治理后，标准 `ContentParts` inline 多模态写入 session backend 前被外存为 `ContentRef`。

@@ -1,4 +1,4 @@
-# 需求范围：Session 多模态外存最小闭环
+# 需求范围：Session 内容外存最小闭环
 
 ## 1. 背景
 `session.Events` 是框架对话历史和运行状态恢复的核心存储路径。当前多模态内容可以通过标准 `model.Message.ContentParts` 进入 session event，其中 image/audio/file 都可能携带 inline bytes 或 data URL。
@@ -67,9 +67,9 @@
 
 默认策略：
 - 默认关闭：旧版本升级业务不应在未配置 artifact 和治理开关时自动改变行为。
-- 配置入口：业务配置入口采用 runner option。
-- 配置归属：首期对外配置类型归属 `runner` 包，不为了内部治理实现过早公开独立配置包。
-- 配置演进：首期使用 config struct，哪怕当前只有 `Enabled` 字段，也不使用单 bool option，避免未来扩展时破坏 API。
+- 配置入口：业务配置入口采用 `session/externalization.Wrap`，得到 governed session service 后传给 runner 或其他调用方。
+- 配置归属：首期对外配置类型归属 `session/externalization` 包，因为治理边界是 `session.Service`，不是 runner 专属流程。
+- 配置演进：首期使用 config struct，哪怕当前只有 `Enabled` 字段，也不使用单 bool 参数，避免未来扩展时破坏 API。
 - 实现核心：实现核心采用 session service decorator，治理发生在 `AppendEvent` 进入具体 backend 前。
 - 读取兼容：A 包首期 `GetSession` 默认 hydrate，保持业务可见行为与历史 inline session 一致；未来再提供 without-hydrate 优化入口。
 - 读取视图：hydrate 采用 copy-on-write，只影响返回给调用方的 session view，不把 bytes 写回 persisted event。
