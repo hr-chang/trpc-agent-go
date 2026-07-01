@@ -67,8 +67,8 @@
 
 默认策略：
 - 默认关闭：旧版本升级业务不应在未配置 artifact 和治理开关时自动改变行为。
-- 配置入口：业务配置入口采用 runner option。
-- 配置归属：首期对外配置类型归属 `runner` 包，不为了内部治理实现过早公开独立配置包。
+- 配置入口：首期实现采用公开的 `session/externalization.Wrap` 包装 `session.Service`，业务再通过 `runner.WithSessionService` 注入 wrapped service。
+- 配置归属：首期对外配置类型归属 `session/externalization` 包，runner 只负责接收已包装的 session service；这能覆盖业务直接调用 wrapped `AppendEvent` 的路径。
 - 配置演进：首期使用 config struct，哪怕当前只有 `Enabled` 字段，也不使用单 bool option，避免未来扩展时破坏 API。
 - 实现核心：实现核心采用 session service decorator，治理发生在 `AppendEvent` 进入具体 backend 前。
 - 读取兼容：A 包首期 `GetSession` 默认 hydrate，保持业务可见行为与历史 inline session 一致；未来再提供 without-hydrate 优化入口。

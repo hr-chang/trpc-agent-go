@@ -74,6 +74,39 @@
     - 未配置 artifact service 或关闭治理时，不应静默丢内容，也不应破坏现有行为。
     - 文档说明默认行为、历史兼容和业务升级影响。
 
+### 需求包 A.2：Session 外存读取优化
+#### 目标
+在 A 包正确性闭环已经成立后，降低默认 hydrate 带来的读取放大和 artifact I/O，提供 persisted view、without-hydrate 和按需 hydrate 能力。
+
+#### 范围
+- 读取入口：
+    - `GetSession` / `ListSessions` / `SearchEvents` / `GetEventWindow` 的显式 without-hydrate 或 persisted-view 读取能力。
+    - 保持现有默认 hydrate 行为，避免破坏已发布业务代码。
+- 按需恢复：
+    - message/event/content-part 粒度 hydrate。
+    - provider request、replay、debug、eval 等 consumer 按需触发 hydrate。
+- 防线：
+    - 在模型请求构造或 provider adapter 前增加 unresolved internal ref 校验，覆盖 without-hydrate、注入消息和内部 persisted view 路径。
+
+#### 不做
+- 不改变 A 的 persisted view 数据格式。
+- 不做 provider file upload / file id 优化；该能力归需求包 I。
+- 不做完整 artifact GC；该能力归需求包 J。
+
+#### 依赖
+- 需求包 A。
+
+#### 可发布验收
+- 默认读取行为保持兼容；显式 without-hydrate 读取不触发 artifact load。
+- 需要完整内容的继续对话、回放、调试、评测路径可以按需 hydrate。
+- unresolved internal ref 不会被直接发送给 provider。
+- artifact 缺失、校验失败或 ref 解析失败有明确错误。
+
+#### 需要在需求设计中确认
+- 读取 option 命名和默认值。
+- without-hydrate 返回完整 `ContentRef`、摘要、还是只返回 persisted event 原样。
+- hydrate helper 是否继续内部使用，还是公开给业务/工具链。
+
 ### 需求包 B：AG-UI / Client Replay 多模态治理
 #### 目标
 治理客户端回放面中的多模态 payload，避免只治理 session 事件后，AG-UI track、MessagesSnapshot、event bridge 或 SSE cache 等回放路径仍保存大块 inline 内容。
@@ -411,6 +444,43 @@
 - 上传何时启动，能否与 request 其他构造步骤并行。
 - provider file id cache 的作用域、TTL 和失效处理。
 
+### 需求包 J：Artifact 生命周期管理
+#### 目标
+在 A/C/D 等需求包持续产生 artifact 引用后，建立 session/content artifact 的生命周期、清理和 orphan 治理能力，避免长期存储无界增长。
+
+#### 范围
+- 引用关系：
+    - session event `ContentRef`、tool output ref、workspace output ref 到 artifact 的 owner/usage 关系。
+    - artifact metadata 中的 session、event、message、part、source package 等追踪信息。
+- 删除与清理：
+    - session 删除、用户数据清理、业务主动删除时的 artifact 清理策略。
+    - orphan artifact 扫描、dry-run、报告和后台清理任务。
+    - 清理失败的重试、告警和人工修复入口。
+- 保留策略：
+    - TTL / retention / pinned artifact 的策略边界。
+    - 与历史迁移、eval/debug 保留周期的关系。
+
+#### 不做
+- 不替代需求包 H 的历史 session 内容迁移。
+- 不实现完整合规审计、权限、加密或脱敏系统。
+- 不管理 provider file id 的长期生命周期；provider file id 归需求包 I 的短生命周期优化。
+- 不定义完整 workspace GC；workspace 文件生命周期归需求包 D。
+
+#### 依赖
+- 需求包 A。
+- 建议在 C/D 的结果引用形态稳定后推进。
+
+#### 可发布验收
+- 可以识别 session/content artifact 的 owner 和引用来源。
+- 删除 session 或执行清理任务不会误删仍被引用的 artifact。
+- orphan 扫描支持 dry-run 和可解释报告。
+- 清理失败不会破坏 session 读取语义，并有可追踪错误。
+
+#### 需要在需求设计中确认
+- 是否建立反引用索引，还是先通过扫描 session/event/ref 构建引用图。
+- 各 artifact backend 对 listing、metadata 查询、版本删除的支持差异。
+- session 删除是否默认同步删除 artifact，还是先只提供显式清理工具。
+
 ## 4. 横向要求
 每个需求包都必须包含：
 - 兼容性：
@@ -428,32 +498,55 @@
     - 状态、事件、观测、回放、评测类存储不应无约束保存大对象本体。
 
 ## 5. 建议排期关系
+### 5.1 排期原则
+排期从业务方感受出发：优先解决业务最容易感知的成本、稳定性、升级和排障问题；同时保留基本工程完整性，避免先扩大 artifact/ref 生产面，再回头补读取、生命周期和迁移评估。
+
+判断顺序：
+- 业务可用性：
+    - 开启后读取是否仍然可控。
+    - 列表、回放、调试、继续对话是否稳定。
+    - artifact 缺失、hydrate 失败、provider 外发是否有明确错误。
+- 运维可控性：
+    - artifact 是否能定位来源。
+    - 是否知道存量 inline 数据规模。
+    - 是否有 orphan / 清理 / dry-run 能力。
+- 风险覆盖面：
+    - 哪些路径仍会把大对象写进长期存储。
+    - 哪些路径会复制到日志、trace、eval 等更难治理的系统。
+
 已完成基线：
 ```text
 需求包 A：Session 多模态外存最小闭环
 ```
 
-A 完成后，后续优先级建议：
+### 5.2 A 完成后的建议顺序
 ```text
+需求包 A.2：Session 外存读取优化
+需求包 J：Artifact 生命周期管理（最小闭环）
+需求包 H：历史数据迁移工具（先 dry-run，后改写）
 需求包 C：Tool Result / Execution Output 表示治理
 需求包 E1：Telemetry / Debuglog / ExecutionTrace 默认止血
-需求包 F：Graph Checkpoint / State / HITL Payload 泄漏守护
-需求包 D：Workspace / Sandbox / Skill 文件产物治理
 需求包 B：AG-UI / Client Replay 多模态治理
+需求包 D：Workspace / Sandbox / Skill 文件产物治理
+需求包 F：Graph Checkpoint / State / HITL Payload 泄漏守护
+需求包 I：Provider Attachment Request Optimization
 需求包 E2：观测调试引用化展示与受控 Hydrate
 需求包 G：Evaluation / EvalSet 治理
-需求包 H：历史数据迁移工具
-需求包 I：Provider Attachment Request Optimization
 ```
 
 推荐说明：
-- A 后优先 C：
-    - 补齐工具、Skill、CodeExecutor、workspace、subagent 执行结果中的 inline blob 风险。
-- E1 可与 C 并行：
-    - 先避免观测和调试系统继续复制完整多模态 payload。
-- F 上调优先级：
-    - 生产场景中 Graph / HITL / checkpoint 使用频率高，状态快照风险更靠前。
+- A.2 先做：
+    - 业务开启 A 后最先感知的是读取、列表、回放、继续对话是否变慢或失败；A.2 提供 without-hydrate / persisted view / 按需 hydrate 和 provider 前 unresolved ref 防线。
+- J 做最小闭环：
+    - A 已经开始生产 artifact。至少要让业务能追踪 owner、识别 orphan、做安全 dry-run，避免“能写不能管”。
+- H 放在 J 后：
+    - 对业务方来说，存量历史数据是否能治理是完整诉求，不应在总排期里拆散。H 内部应分阶段实施：先只读扫描 / dry-run / 容量与风险报告，再在确认范围、备份、幂等和回滚策略后执行真实改写。
+- C 和 E1 随后推进：
+    - C 补齐默认 tool result JSON / execution output 仍可能内联大对象的问题；E1 防止观测调试系统二次复制完整 payload。两者可以按业务当前痛点并行或换序。
+- B 由业务场景驱动：
+    - 如果业务主要通过 AG-UI / client replay 交互，B 应提前到 C/E1 前后；否则可放在工具和观测止血之后。
 - D 与 C 强关联：
     - C 解决结果表达，D 解决文件产物和临时文件生命周期。
-- B 视团队近期 AG-UI / client replay 重点决定是否提前。
-- E2/G/H/I 建议在引用形态和默认止血能力稳定后推进。
+- I 的收益是请求形态和性能，不是 A 正确性前置；但如果大附件调用频繁，可提前到 C/D 之后。
+- F 关注高级运行状态：
+    - Graph / HITL / checkpoint 很重要，但如果业务当前主要痛点仍是 session、工具结果、回放和观测成本，可排在这些业务可见路径之后。

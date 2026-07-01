@@ -82,7 +82,7 @@
 框架会被业务从历史版本升级使用，因此每一版都必须支持历史框架版本已经写入的数据，包括历史 inline bytes/base64 和未来引用化数据。可以把历史数据迁移工具放到后续需求，但运行时读取、回放、hydrate 或兼容解析不能缺位；不能出现某一版发布后不支持历史落盘 DB 数据，等待下一版再补支持的情况。
 
 ## 8. 后续需求拆分建议
-优先级分层只表达重要性，不直接等同于需求拆分。
+优先级从业务方感受出发，不只按技术风险排序。业务最先关心的是：开启后是否稳定、读取是否可控、存量有多少、artifact 能不能管、出了问题能不能解释。因此 A 后续应先补可用性和运维闭环，再扩大到更多复制面。
 
 已完成基线：
 - `session.Events` 中标准 `ContentParts` inline 多模态内容的持久化视图治理。
@@ -91,18 +91,20 @@
 - runtime view 与 persisted view 分离。
 
 下一阶段重点：
+- Session 外存读取优化：without-hydrate / persisted view / 按需 hydrate / provider 前 unresolved ref 防线。
+- Artifact 生命周期管理最小闭环：owner/ref 追踪、orphan dry-run、安全清理策略。
+- 历史数据迁移工具：作为完整需求包放在 lifecycle 之后；包内先做容量/收益/风险 dry-run，再进入真实改写。
 - Tool Result / Execution Output 表示治理。
 - Telemetry / Debuglog / ExecutionTrace 默认止血。
-- Graph Checkpoint / State / HITL Payload 泄漏守护。
-- Workspace / Sandbox / Skill 文件产物治理。
-- AG-UI / Client Replay 多模态治理。
+- AG-UI / Client Replay 多模态治理：如果业务当前主要使用 AG-UI，可提前。
 
 后续扩展：
+- Workspace / Sandbox / Skill 文件产物治理。
+- Graph Checkpoint / State / HITL Payload 泄漏守护。
 - 观测调试引用化展示与受控 hydrate。
 - evaluation recorder / evalset / eval result 治理。
-- 历史数据迁移工具。
 - Provider Attachment Request Optimization。
-- 完整 GC、审计、权限、加密、脱敏能力。
+- 完整审计、权限、加密、脱敏能力。
 
 ## 9. 需后续具体需求确认
 以下内容不在整体规划阶段提前拍板，应在具体需求设计中确认：
