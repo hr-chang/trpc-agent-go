@@ -170,26 +170,35 @@ A 不按来源区分是否业务自定义。只要进入 `session.Events` 的内
 A 包首期把治理逻辑落在两个明确位置。
 
 #### 装配位置
-基于现有代码，治理能力应在 runner 构造期装配，而不是改每一个 `AppendEvent` / `GetSession` 调用点。
+基于 `feat/MMCG_session-multimodal-externalization` 的实现，治理能力已经收敛为公开 `session.Service` wrapper，而不是 runner 专属 option。业务显式调用 `session/externalization.Wrap` 包装具体 backend，再通过 `runner.WithSessionService` 注入 runner；业务直接写 session 时，也应复用同一份 wrapped service。
 
-现有装配点：
-- `runner.NewRunner`：
-    - 当前会解析 `options.sessionService`。
-    - 如果未配置，则创建 `inmemory.NewSessionService()`。
-    - 随后把 `options.sessionService` 赋值给 `runner.sessionService`。
-- `runner.NewRunnerWithAgentFactory`：
-    - 具有同样的 `options.sessionService` 初始化和赋值逻辑。
-
-建议插入：
+当前装配方式：
 ```text
-options := newOptions(opts...)
-ensure options.sessionService
-if session multimodal externalization enabled:
-  options.sessionService = sessionmm.Wrap(options.sessionService, cfg, artifactService)
-runner.sessionService = options.sessionService
+artifactService := ...
+rawSessionService := ...
+sessionService := externalization.Wrap(
+  rawSessionService,
+  artifactService,
+  externalization.Config{Enabled: true},
+)
+runner.NewRunner(
+  appName,
+  agent,
+  runner.WithSessionService(sessionService),
+  runner.WithArtifactService(artifactService),
+)
 ```
 
-这样 runner 内现有所有 `r.sessionService.AppendEvent(...)` 和 `r.sessionService.GetSession(...)` 调用都能复用同一治理逻辑。`newRunInvocation` 也会把包装后的 `r.sessionService` 注入到 invocation，因此 agent/tool 内部通过 invocation 访问 session service 时也能走同一层治理。
+这样 runner 内现有所有 `r.sessionService.AppendEvent(...)` 和 `r.sessionService.GetSession(...)` 调用都能复用同一治理逻辑。`newRunInvocation` 也会把包装后的 `r.sessionService` 注入到 invocation，因此 agent/tool/plugin 内部通过 invocation 访问 session service 时也能走同一层治理。
+
+该方案的取舍：
+- 优点：
+    - 不需要修改 runner public option surface。
+    - 治理能力作为 session decorator 暴露，能被 runner 之外的直接 session 写入复用。
+    - 关闭治理时 `Wrap(..., Config{Enabled:false})` 返回原 service，默认行为稳定。
+- 约束：
+    - 业务必须保证使用 wrapped service，而不是 raw backend。
+    - `artifactService == nil` 的错误仍在 append/hydrate 时 fail closed；如果未来需要更早发现配置错误，可在 wrapper 外增加应用侧构造校验或新增便捷装配 helper。
 
 #### 实现点一：外存点
 位置：
@@ -484,26 +493,33 @@ sessionpart_<unix-ms>_<sha256-16>_<uuid>.<ext>
 - 当前 event 中存在标准 `ContentParts` inline 多模态内容。
 
 ### 11.2 配置入口与治理位置
-已确认：业务配置入口采用 runner option；实现核心采用 session service decorator。
+已确认：业务配置入口采用 `session/externalization.Wrap`；实现核心采用 session service decorator。
 
 已确认 API 形态：
 ```go
-runner.WithSessionMultimodalExternalization(runner.SessionMultimodalExternalizationConfig{
-    Enabled: true,
-})
+artifactService := artifactinmemory.NewService()
+wrappedSessionService := externalization.Wrap(
+    rawSessionService,
+    artifactService,
+    externalization.Config{Enabled: true},
+)
+
+runner.NewRunner(
+    appName,
+    agent,
+    runner.WithSessionService(wrappedSessionService),
+    runner.WithArtifactService(artifactService),
+)
 ```
 
-配置类型首期归属 `runner` 包，避免为了内部 decorator/helper 过早公开 `sessionmm` 这类实现概念包。后续如果业务明确需要绕过 runner 使用同等治理能力，再评估是否公开更底层的配置类型或包装入口。
+配置类型首期归属 `session/externalization` 包，明确表达这是 session service decorator 能力，而不是 runner 私有逻辑。runner 继续只负责接收 `runner.WithSessionService` 注入的 service。
 
-该 option 不建议设计成 `WithSessionMultimodalExternalization(true)` 这类单 bool 形式。虽然首期只有启停能力，但 Go 函数签名后续不能无损追加参数；使用 config struct 可以在不破坏调用方代码的前提下继续增加字段。
-
-Go 不支持同一个包内同名函数按参数类型重载，因此不能同时提供 `runner.WithSessionMultimodalExternalization(bool)` 和 `runner.WithSessionMultimodalExternalization(Config{...})` 两个同名函数。用 `any` / variadic 参数兼容两种入参会削弱类型约束和文档表达，不符合框架 API 的长期演进目标。
+该配置不建议设计成单 bool 入口。虽然首期只有启停能力，但 Go 函数签名后续不能无损追加参数；使用 config struct 可以在不破坏调用方代码的前提下继续增加字段。
 
 治理真正发生的位置：
 ```text
-runner / adapter / direct caller
-  -> session.Service.AppendEvent
-  -> session multimodal governance decorator
+runner / adapter / direct caller using wrapped service
+  -> session/externalization decorator.AppendEvent
   -> concrete session backend
 ```
 
@@ -514,9 +530,9 @@ runner / adapter / direct caller
     - 业务直接调用 `session.Service.AppendEvent` 时，只要使用被包装的 service，也能获得一致治理。
 - 职责清晰：
     - concrete DB backend 不需要理解 artifact、hydrate、开关和失败语义。
-    - runner option 只负责装配 decorator 和传递配置，不承载具体治理逻辑。
+    - runner 不承载具体治理逻辑，只使用调用方传入的 session service。
 
-首期不默认对框架外开放手动包装 constructor/decorator。若后续业务明确存在绕过 runner、自行持有 session service 且需要同等治理的诉求，再评估是否公开受控包装入口。
+首期已对框架外开放受控包装入口。业务如果绕过 runner、自行持有 session service 且也希望治理直接写入，必须复用 wrapped service，而不是 raw backend。
 
 ### 11.3 配置演进策略
 框架迭代需要避免“首期能用，但未来一扩展就断崖式改 API”。因此首期配置面按可扩展配置对象设计，而不是按当前最小字段设计。
@@ -524,7 +540,7 @@ runner / adapter / direct caller
 已确认：首期就使用 config struct，哪怕当前只有 `Enabled` 字段，也不使用单 bool option。
 
 演进原则：
-- public option 保持稳定：首期暴露一个 runner option，后续优先通过给 config struct 增加字段扩展能力。
+- public wrapper 保持稳定：首期暴露 `externalization.Wrap` 和 config struct，后续优先通过给 config struct 增加字段扩展能力。
 - 零值兼容：新增字段的零值必须等价于首期默认行为，避免业务升级后行为漂移。
 - 枚举优先：hydrate 策略、失败策略、阈值策略等未来能力如果需要配置，优先使用命名枚举/策略结构，而不是堆叠多个含义相近的 bool。
 - 内外分层：public config 只表达业务可理解的治理策略；内部 decorator/helper 可以有更细的私有 config，不把内部实现细节过早暴露。

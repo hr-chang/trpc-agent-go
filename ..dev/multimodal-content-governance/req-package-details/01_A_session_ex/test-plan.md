@@ -12,7 +12,8 @@
 ## 2. 被测对象与契约
 端到端契约（对外可观察行为）：
 - 装配入口：
-    - `runner.WithSessionMultimodalExternalization(runner.SessionMultimodalExternalizationConfig{Enabled: true})`。
+    - `session/externalization.Wrap(inner, artifactService, externalization.Config{Enabled: true})`。
+    - wrapped service 通过 `runner.WithSessionService` 注入 runner；直接 session 写入也应使用同一份 wrapped service。
 - 写入治理：
     - 开启后，标准 `ContentParts` 的 inline 多模态在落入 session backend 前被外存为引用。
 - 读取还原：
@@ -40,7 +41,7 @@
 ## 4. 测试分层与方法
 端到端分层：
 - 主链路端到端：
-    - 通过 runner option 装配 + fake model，验证写入减重、默认 hydrate、当前轮不变、继续对话。
+    - 通过 `session/externalization.Wrap` 装配 + fake model，验证写入减重、默认 hydrate、当前轮不变、继续对话。
 - 跨后端一致性：
     - 同一组行为在多个 session backend 上重放，验证行为一致。
 - 写入面回归：
@@ -107,7 +108,8 @@
 
 ## 7. 端到端主链路用例
 装配方式：
-- 通过 `runner.WithSessionMultimodalExternalization` 开启治理。
+- 通过 `session/externalization.Wrap` 包装 session service 开启治理。
+- 通过 `runner.WithSessionService` 注入 wrapped service，并通过 `runner.WithArtifactService` 注入同一 artifact service。
 - 使用记录入参的 fake model，不接真实 provider。
 
 用例：
@@ -117,7 +119,7 @@
     - 当前轮模型调用收到原始内容，不受 persisted view 影响（R2）。
     - 新引用化 session 可继续对话：后续轮 fake model 通过 hydrate 后历史拿到还原内容。
 - 默认关闭：
-    - 未配置该 option 时行为与既有版本一致，不产生 artifact（W3）。
+    - 未包装 session service，或 `externalization.Config{Enabled:false}` 时行为与既有版本一致，不产生 artifact（W3）。
 
 ## 8. provider 边界负向用例（纳入 A 包）
 目标：

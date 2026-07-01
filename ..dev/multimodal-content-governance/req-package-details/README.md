@@ -22,6 +22,8 @@
 - [`08_G_eval.md`](./08_G_eval.md)：需求包 G，Evaluation / EvalSet 治理。
 - [`09_H_migration.md`](./09_H_migration.md)：需求包 H，历史数据迁移工具。
 - [`10_I_provider_attach.md`](./10_I_provider_attach.md)：需求包 I，Provider Attachment Request Optimization。
+- [`11_A2_session_read_optimization.md`](./11_A2_session_read_optimization.md)：需求包 A.2，Session 外存读取优化。
+- [`12_J_artifact_lifecycle.md`](./12_J_artifact_lifecycle.md)：需求包 J，Artifact 生命周期管理。
 
 ## 通用技术约定
 ### 运行时视图与持久化视图
