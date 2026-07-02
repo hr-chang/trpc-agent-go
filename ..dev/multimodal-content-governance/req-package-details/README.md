@@ -23,7 +23,10 @@
 - [`09_H_migration.md`](./09_H_migration.md)：需求包 H，历史数据迁移工具。
 - [`10_I_provider_attach.md`](./10_I_provider_attach.md)：需求包 I，Provider Attachment Request Optimization。
 - [`11_A2_session_read_optimization.md`](./11_A2_session_read_optimization.md)：需求包 A.2，Session 外存读取优化。
-- [`12_J_artifact_lifecycle.md`](./12_J_artifact_lifecycle.md)：需求包 J，Artifact 生命周期管理。
+- 需求包 J-1：Artifact TTL / Retention 基础能力。
+    - [`12_J1_artifact_ttl_retention/req-scope.md`](./12_J1_artifact_ttl_retention/req-scope.md)
+    - [`12_J1_artifact_ttl_retention/tech-design.md`](./12_J1_artifact_ttl_retention/tech-design.md)
+- [`13_J2_artifact_lifecycle.md`](./13_J2_artifact_lifecycle.md)：需求包 J-2，Artifact 生命周期治理。
 
 ## 通用技术约定
 ### 运行时视图与持久化视图

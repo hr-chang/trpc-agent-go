@@ -446,9 +446,24 @@
 
 ### 需求包 J：Artifact 生命周期管理
 #### 目标
-在 A/C/D 等需求包持续产生 artifact 引用后，建立 session/content artifact 的生命周期、清理和 orphan 治理能力，避免长期存储无界增长。
+在 A/C/D 等需求包持续产生 artifact 引用后，建立 artifact retention 基础能力，以及 session/content artifact 的生命周期、清理和 orphan 治理能力，避免长期存储无界增长。
+
+本需求包建议拆成两个可发布 PR：
+- J-1：Artifact TTL / Retention 基础能力。
+- J-2：Artifact 生命周期治理。
 
 #### 范围
+- J-1：Artifact TTL / Retention 基础能力：
+    - artifact metadata 支持 `expires_at` / retention 信息。
+    - artifact service 支持配置默认 TTL；保存 artifact 时使用默认 TTL，也支持单次保存覆盖 TTL / retention。
+    - backend 能保存、读取、列出 TTL / retention 元信息。
+    - 提供过期扫描能力，支持 dry-run。
+    - 提供 cleanup 删除能力，启用后可删除已过期且未 pinned 的 artifact version。
+    - 本期直接支持现有对象存储型 backend：`artifact/cos` 与 `artifact/s3`，其中 `artifact/s3` 覆盖 AWS S3、MinIO、R2 等 S3-compatible storage 的共同能力。
+- J-2：Artifact 生命周期治理：
+    - 基于 session/content/tool/workspace/eval/debug 等引用关系，判断 artifact 是否仍被使用。
+    - 结合 TTL / retention、pinned artifact 和 orphan 状态决定可清理对象。
+    - 提供安全清理、重试、报告和人工修复入口。
 - 引用关系：
     - session event `ContentRef`、tool output ref、workspace output ref 到 artifact 的 owner/usage 关系。
     - artifact metadata 中的 session、event、message、part、source package 等追踪信息。
@@ -465,20 +480,28 @@
 - 不实现完整合规审计、权限、加密或脱敏系统。
 - 不管理 provider file id 的长期生命周期；provider file id 归需求包 I 的短生命周期优化。
 - 不定义完整 workspace GC；workspace 文件生命周期归需求包 D。
+- J-1 不根据业务引用关系判断 artifact 是否安全；引用关系治理和 orphan 安全删除策略放到 J-2。
 
 #### 依赖
-- 需求包 A。
-- 建议在 C/D 的结果引用形态稳定后推进。
+- J-1 不硬依赖需求包 A；A 是重要使用场景和业务驱动，但 TTL / retention 是独立 ArtifactService 能力。
+- J-2 建议在 C/D 的结果引用形态稳定后推进，避免引用治理模型频繁返工。
 
 #### 可发布验收
-- 可以识别 session/content artifact 的 owner 和引用来源。
-- 删除 session 或执行清理任务不会误删仍被引用的 artifact。
-- orphan 扫描支持 dry-run 和可解释报告。
-- 清理失败不会破坏 session 读取语义，并有可追踪错误。
+- J-1：
+    - artifact 可以记录、读取、列出 TTL / retention 元信息。
+    - artifact service 支持 service-level 默认 TTL 与单次保存覆盖。
+    - 过期扫描支持 dry-run 并返回逐 artifact version 明细，至少覆盖 session scope 与 user scope。
+    - cleanup 可删除已过期且未 pinned 的 artifact version，并提供后台定时清理。
+    - cleanup 结果可见，至少区分 deleted / skipped / failed。
+    - `artifact/cos` 与 `artifact/s3` 对象存储 backend 可用；`artifact/s3` 覆盖 AWS S3、MinIO、R2 等 S3-compatible storage 的共同能力。
+- J-2：
+    - 可以识别 session/content artifact 的 owner 和引用来源。
+    - 删除 session 或执行清理任务不会误删仍被引用的 artifact。
+    - orphan 扫描支持 dry-run 和可解释报告。
+    - 清理失败不会破坏 session 读取语义，并有可追踪错误。
 
-#### 需要在需求设计中确认
+#### 后续需要在 J-2 设计中确认
 - 是否建立反引用索引，还是先通过扫描 session/event/ref 构建引用图。
-- 各 artifact backend 对 listing、metadata 查询、版本删除的支持差异。
 - session 删除是否默认同步删除 artifact，还是先只提供显式清理工具。
 
 ## 4. 横向要求
@@ -522,7 +545,8 @@
 ### 5.2 A 完成后的建议顺序
 ```text
 需求包 A.2：Session 外存读取优化
-需求包 J：Artifact 生命周期管理（最小闭环）
+需求包 J-1：Artifact TTL / Retention 基础能力
+需求包 J-2：Artifact 生命周期治理
 需求包 H：历史数据迁移工具（先 dry-run，后改写）
 需求包 C：Tool Result / Execution Output 表示治理
 需求包 E1：Telemetry / Debuglog / ExecutionTrace 默认止血
@@ -537,8 +561,9 @@
 推荐说明：
 - A.2 先做：
     - 业务开启 A 后最先感知的是读取、列表、回放、继续对话是否变慢或失败；A.2 提供 without-hydrate / persisted view / 按需 hydrate 和 provider 前 unresolved ref 防线。
-- J 做最小闭环：
-    - A 已经开始生产 artifact。至少要让业务能追踪 owner、识别 orphan、做安全 dry-run，避免“能写不能管”。
+- J 分两步做：
+    - J-1 先给 artifact 层补 TTL / retention 表达、过期扫描和 cleanup 删除能力，并直接覆盖 COS 与 S3-compatible 对象存储。
+    - J-2 再把 TTL / retention 与 session/content 引用关系结合，支持 owner 追踪、orphan 判断和治理级安全清理，避免“能删但不知道是否仍被引用”。
 - H 放在 J 后：
     - 对业务方来说，存量历史数据是否能治理是完整诉求，不应在总排期里拆散。H 内部应分阶段实施：先只读扫描 / dry-run / 容量与风险报告，再在确认范围、备份、幂等和回滚策略后执行真实改写。
 - C 和 E1 随后推进：
