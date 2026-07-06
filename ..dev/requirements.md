@@ -2,20 +2,19 @@
 
 ## 1. 背景与目标
 
-本需求用于证明 `tRPC-Agent-Go` 能够支撑真实软件工程 Agent 场景：基于
-`tRPC-Agent-Go` 构建 Go-native SWE Agent，并在 SWE-Bench Verified 全量 500 case 上
-完成可复现、可审计的评测。
+本需求用于证明 `tRPC-Agent-Go` 能够支撑真实软件工程 Agent 场景：基于 `tRPC-Agent-Go`
+构建 Go-native SWE Agent，并在 SWE-Bench Verified 全量 500 case 上完成可复现、可审计的评测。
 
-本需求最终服务于一次性对外宣发。整个工作只在能力证明完成、结果可核验后统一宣发；不需要设计
-"先宣发、再校正" 或分阶段对外披露策略。当前阶段只关注评测正确性、完整性和证据链。
+本需求最终服务于一次性对外宣发。能力证明完成、结果可核验后再统一对外；当前阶段只关注评测是否正确、
+完整、可复核。
 
 对外希望支撑的核心表述是：
 
 > tRPC-Agent-Go 可以构建 Go-native SWE Agent，并在 SWE-Bench Verified 全量 500
 > case 上完成真实评测；其结果可与同等条件下的基线 Agent 对比。
 
-本需求不是单纯建设通用 benchmark 流水线，也不是只导入外部 baseline。评测流水线是工程底座，
-真正的交付主角是基于 `tRPC-Agent-Go` 的 Go-native SWE Agent 及其全量评测结果。
+本需求不是建设通用 benchmark 流水线，也不是只导入外部 baseline。评测流水线是工程底座，核心交付是
+Go-native SWE Agent 及其全量评测结果。
 
 ## 2. 术语与范围定义
 
@@ -37,9 +36,9 @@
   `swebench.harness.run_evaluation`。
 - sb-cli：SWE-Bench hosted evaluation CLI。当前已知不可用，不作为主 verifier 或阻塞项。
 
-## 3. 需求约束边界
+## 3. 约束边界
 
-本需求约束的是能力证明、评测口径和证据链，不预先锁死具体工程实现路径。
+本需求约束能力证明、评测口径和证据链，不锁死具体工程实现路径。
 
 硬约束：
 
@@ -47,7 +46,7 @@
 - 必须使用官方 local harness 作为主 verifier；
 - baseline 和 native agent 必须共享同一 dataset snapshot、模型策略、预算口径和验证流程；
 - agent 运行输入不得包含官方答案或验证测试信息，包括 gold `patch`、`test_patch`、
-  `FAIL_TO_PASS`、`PASS_TO_PASS`；official harness 判定测试仅由 verifier 持有；
+  `FAIL_TO_PASS`、`PASS_TO_PASS`；判定测试仅由 official harness 持有；
 - 每个 case 必须有明确状态，并保留足以复算最终指标的证据链；
 - 最终报告必须中英文双语。
 
@@ -55,11 +54,11 @@
 
 - 不限定最终模型必须是 GLM-5；当前默认单模型，若后续改为多模型需重新确认；
 - 不限定 native agent 必须采用 bash-only、固定 Go CLI 或固定 runner 形态；
-- 不限定具体 workspace、sandbox、patch extraction、trace schema 的内部实现，只要求最终 artifact
-  满足报告和复核需要；
+- 不限定 workspace、sandbox、patch extraction、trace schema 的内部实现，只要求最终 artifact
+  支撑报告和复核；
 - 不要求普通 PR CI 跑完整 500 case。
 
-## 4. 业务价值与对外叙事
+## 4. 业务价值
 
 本项目的业务价值是为 `tRPC-Agent-Go` 提供一个行业认可、开发者容易理解、可复现核验的能力证明。
 最终报告需要说明：
@@ -67,10 +66,9 @@
 - `tRPC-Agent-Go` 可以承载 SWE-style coding agent 的完整运行链路；
 - Go-native Agent 能读取真实 issue、操作真实仓库、生成官方可验证 patch；
 - 全量 500 case 的结果、失败类型、耗时和资源使用可追踪；
-- 与同一数据集、同一 verifier、同一模型策略下的 baseline 相比，差距或优势是什么。
+- 与同数据集、同 verifier、同模型策略下的 baseline 相比，差距或优势是什么。
 
-第一版不设置 resolved rate 下限，也不承诺必须超过 baseline。验收重点是评测本身是否正确、完整、
-可核验。
+第一版不设置 resolved rate 下限，也不承诺必须超过 baseline。验收重点是评测正确性、完整性和可核验性。
 
 ## 5. 最终交付物
 
@@ -94,7 +92,7 @@
    - run config、case-level 结果、predictions、patches、traces、官方 local harness report、
      comparison files。
 
-## 6. 仓库与分支落点
+## 6. 仓库落点
 
 主仓库 `trpc-agent-go` 只承载需求/设计文档和最终 submodule 指针更新。实际代码、报告和数据落在
 `benchmark` submodule，即 `trpc-agent-go-benchmark` 仓库。
@@ -118,7 +116,7 @@ benchmark 仓库需求分支：
 bench/swe-verified
 ```
 
-最终合入路径：
+合入路径：
 
 1. 在个人 benchmark fork 的 `bench/swe-verified` 分支开发 `benchmark/swebench`；
 2. 从个人 fork 向官方 `trpc-group/trpc-agent-go-benchmark` 提交 PR；
@@ -170,7 +168,7 @@ python -m swebench.harness.run_evaluation \
 默认采用单模型评测。具体模型不在需求层面绑定 GLM-5，最终按模型可用性、成本、稳定性、endpoint
 能力、工程接入难度和评测公平性综合决定。
 
-需求层面只规定公平性原则：
+公平性原则：
 
 - baseline 和 native agent 必须使用同一套已确认模型策略；
 - 默认情况下，两组都使用同一模型和同一 endpoint；
@@ -178,20 +176,20 @@ python -m swebench.harness.run_evaluation \
 - 模型名称、版本、endpoint、参数、usage 字段必须写入 `run_config.json`；
 - 公开 leaderboard 结果只作为背景引用，不替代本项目重跑结果。
 
-baseline 使用 mini-SWE-agent。选择它的原因是结构简单、有 SWE-Bench batch runner，且有官方结果可作
-背景对比锚点。第一版不增加其他 baseline，避免扩大对比矩阵和解释成本。
+baseline 使用 mini-SWE-agent。它结构简单、有 SWE-Bench batch runner，且有官方结果可作背景参考。
+第一版不增加其他 baseline，避免扩大对比矩阵和解释成本。
 
 baseline 目标是复现原版 mini-SWE-agent 链路，不主动改造其 agent 行为。若因本地环境、模型接入或
 official harness 输入格式需要 wrapper、配置注入或 predictions 格式转换，只允许做非语义适配，并在
 `run_config.json` 中记录 mini-SWE-agent commit、配置、模型参数、转换步骤和 runner commit。
 
-native agent 不要求复刻 mini-SWE-agent。第一版可以参考 mini-SWE-agent 的最小可比行为来降低解释
-成本，但允许使用 `tRPC-Agent-Go` 更自然的 runner、tool、workspace、sandbox、trace 设计，只要最终
-输出满足同一 prediction 和 verifier contract。
+native agent 不要求复刻 mini-SWE-agent。它可以参考 mini-SWE-agent 的最小可比行为，但允许使用
+`tRPC-Agent-Go` 更自然的 runner、tool、workspace、sandbox、trace 设计；最终只需满足同一 prediction
+和 verifier contract。
 
-## 9. 系统方案
+## 9. 证据链
 
-标准证据链：
+最终证据链如下：
 
 ```text
 SWE-Bench Verified dataset
@@ -205,8 +203,8 @@ SWE-Bench Verified dataset
   -> report and comparison
 ```
 
-上图描述的是需要被保留和审计的数据流，不限定实现时必须是单一 Go CLI、单一进程或单一 runner。
-工程实现可以拆分为多个命令、脚本、服务或离线导入步骤，只要最终归档满足统一 schema，并能复算报告指标。
+上图描述需要保留和审计的数据流，不限定实现必须是单一 Go CLI、单一进程或单一 runner。工程实现可以
+拆分为多个命令、脚本、服务或离线导入步骤，但最终归档必须满足统一 schema，并能复算报告指标。
 
 baseline 和 native 两条链路共享：
 
@@ -230,7 +228,7 @@ baseline 和 native 两条链路共享：
 
 - 支持原版 mini-SWE-agent batch run；
 - 保留 trajectory、prediction、usage、duration；
-- 支持导入 baseline 原始输出并转换为统一归档格式；
+- 支持导入 baseline 原始输出，并转换为统一归档格式；
 - baseline 适配不得改变 agent 可见输入、行动空间或 patch 语义。
 
 ### 10.3 native agent 运行
@@ -265,7 +263,7 @@ baseline 和 native 两条链路共享：
 - 保存原始 harness 输出和 per-case logs；
 - 将官方结果导入统一 case-level schema；
 - 每个 case 最终只能有一个主状态；
-- 工程原因导致的 `infra_error` / `incomplete` 需要修复后重跑，不能作为最终对外报告的未处置状态；
+- 工程原因导致的 `infra_error` / `incomplete` 需要修复后重跑，不得作为最终对外报告的未处置状态；
 - patch apply failed 默认归入 agent 产物无效类 unresolved；只有能证明是 harness、镜像、数据或环境问题时，
   才归入 infra/data baseline issue 并修复后重跑。
 
@@ -286,7 +284,7 @@ baseline 和 native 两条链路共享：
 
 ## 12. 运行与归档要求
 
-每个 admitted run 至少包含：
+每个有效 run 至少归档：
 
 ```text
 run_config.json
@@ -332,16 +330,16 @@ comparison.md
 - patch line stats，例如 `+N/-M`；
 - error 或 incomplete reason。
 
-默认保留完整证据链，但不默认归档所有 case 的完整 workspace。考虑到本需求很可能需要多轮排查，异常
-case、分歧 case、infra/data baseline issue、以及人工指定复查 case 可以显式保存 workspace 或更完整
-的现场材料。报告中的 case-level 明细需要能索引到这些复查材料。
+默认保留完整证据链，但不默认归档所有 case 的完整 workspace。异常 case、分歧 case、
+infra/data baseline issue、以及人工指定复查 case 可以保存 workspace 或更完整现场。报告中的
+case-level 明细需要能索引到这些复查材料。
 
 归档前必须 scrub secrets，避免模型 endpoint、API key、HTTP headers、临时凭证进入 traces、logs 或
 对外 artifact。
 
 ## 13. 报告要求
 
-报告必须中英文双语，参考 benchmark 仓库已有文档组织方式：
+报告必须中英文双语，按 benchmark 仓库已有文档组织：
 
 ```text
 benchmark/swebench/results/REPORT.md
@@ -362,12 +360,12 @@ benchmark/swebench/results/REPORT.zh_CN.md
 - artifact 路径说明；
 - 复现命令。
 
-对外报告只给出最终 500 case 指标和必要的复现路径。smoke、calibration、失败排查过程可以作为内部
-工程记录保存，但不作为对外主结论。
+对外报告只给出最终 500 case 指标和必要复现路径。smoke、calibration、失败排查过程可作为内部工程记录，
+不作为对外主结论。
 
 ## 14. 成本与并发策略
 
-成本不在需求层面绑定某个公开 API 价格。报告按实际模型策略记录资源使用：
+成本不绑定某个公开 API 价格。报告按实际模型策略记录资源使用：
 
 - prompt tokens；
 - completion tokens；
@@ -379,7 +377,7 @@ benchmark/swebench/results/REPORT.zh_CN.md
 - endpoint identifier；
 - 如果 endpoint 提供 cost 字段，则原样归档。
 
-默认规则：
+并发规则：
 
 - 每个 instance 都必须配置 step/action、token、time limits 或等价预算限制；
 - 10 个以内 case 可默认串行；
@@ -428,7 +426,7 @@ benchmark/swebench/results/REPORT.zh_CN.md
 - 导入 predictions、trajectories、harness logs、usage、duration；
 - 产出 baseline-only summary。
 
-退出条件：baseline 链路能在 smoke subset 上稳定复现，并且输出格式能被报告生成器消费。
+退出条件：baseline 链路能在 smoke subset 上稳定复现，输出格式能被报告生成器消费。
 
 ### 阶段二：Go-native SWE Agent
 
@@ -460,8 +458,8 @@ benchmark/swebench/results/REPORT.zh_CN.md
 
 ## 17. 已确认决策
 
-以下是当前已确认的大决策。实现细节默认由工程侧基于这些规则推断，仅在影响方向、成本或对外解释时再
-向需求方确认。
+以下是当前已确认的大决策。实现细节默认由工程侧基于这些规则推断；只有影响方向、成本或对外解释时再
+确认。
 
 1. 模型策略边界：
    - 默认单模型测试；
@@ -498,7 +496,7 @@ benchmark/swebench/results/REPORT.zh_CN.md
    - 如果原版 mini-SWE-agent 复现中使用，则 native agent 也使用；
    - 如果 baseline 未使用，则整个评测都不使用。
 
-## 18. 当前环境核查记录
+## 附录 A：当前环境核查记录
 
 专用容器访问方式：
 
@@ -526,7 +524,7 @@ ssh root@21.214.124.53.devcloud.woa.com -p 36000
 - 安装并验证 official SWE-Bench local harness；
 - 用 gold patch 或单个 known case 验证 harness。
 
-## 19. 风险与开放问题
+## 附录 B：风险与开放问题
 
 - Docker daemon 当前不可用，必须在进入 full run 前修复。
 - SWE-Bench local harness 对磁盘、Docker、镜像缓存要求高，需要明确 cache 路径。
@@ -537,7 +535,7 @@ ssh root@21.214.124.53.devcloud.woa.com -p 36000
 - Verified dataset 或 SWE-Bench harness 版本漂移会影响复现，需要 pin revision。
 - full run 时间长，必须支持断点恢复或明确重跑策略。
 
-## 20. 参考资料
+## 附录 C：参考资料
 
 - SWE-Bench Verified dataset：https://huggingface.co/datasets/princeton-nlp/SWE-bench_Verified
 - SWE-Bench leaderboard：https://www.swebench.com/index.html
