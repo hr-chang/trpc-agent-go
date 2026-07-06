@@ -46,6 +46,8 @@
 - 必须基于 SWE-Bench Verified `test` split 的完整 500 case 给出最终结论；
 - 必须使用官方 local harness 作为主 verifier；
 - baseline 和 native agent 必须共享同一 dataset snapshot、模型策略、预算口径和验证流程；
+- agent 运行输入不得包含官方答案或验证测试信息，包括 gold `patch`、`test_patch`、
+  `FAIL_TO_PASS`、`PASS_TO_PASS`；official harness 判定测试仅由 verifier 持有；
 - 每个 case 必须有明确状态，并保留足以复算最终指标的证据链；
 - 最终报告必须中英文双语。
 
@@ -132,6 +134,9 @@ bench/swe-verified
 - denominator：500；
 - 需要固化 dataset revision 或等价快照信息；
 - 需要输出 500 case list 和 case list hash。
+- `hints_text` 口径跟随 baseline 复现链路：如果复现原版 mini-SWE-agent 时实际使用
+  `hints_text`，native agent 也按同一口径使用；如果 baseline 未使用，则整个评测都不使用
+  `hints_text`。该口径必须写入 `run_config.json` 和报告。
 
 主 verifier：
 
@@ -175,6 +180,10 @@ python -m swebench.harness.run_evaluation \
 
 baseline 使用 mini-SWE-agent。选择它的原因是结构简单、有 SWE-Bench batch runner，且有官方结果可作
 背景对比锚点。第一版不增加其他 baseline，避免扩大对比矩阵和解释成本。
+
+baseline 目标是复现原版 mini-SWE-agent 链路，不主动改造其 agent 行为。若因本地环境、模型接入或
+official harness 输入格式需要 wrapper、配置注入或 predictions 格式转换，只允许做非语义适配，并在
+`run_config.json` 中记录 mini-SWE-agent commit、配置、模型参数、转换步骤和 runner commit。
 
 native agent 不要求复刻 mini-SWE-agent。第一版可以参考 mini-SWE-agent 的最小可比行为来降低解释
 成本，但允许使用 `tRPC-Agent-Go` 更自然的 runner、tool、workspace、sandbox、trace 设计，只要最终
@@ -221,7 +230,8 @@ baseline 和 native 两条链路共享：
 
 - 支持原版 mini-SWE-agent batch run；
 - 保留 trajectory、prediction、usage、duration；
-- 支持导入 baseline 原始输出并转换为统一归档格式。
+- 支持导入 baseline 原始输出并转换为统一归档格式；
+- baseline 适配不得改变 agent 可见输入、行动空间或 patch 语义。
 
 ### 10.3 native agent 运行
 
@@ -243,7 +253,8 @@ baseline 和 native 两条链路共享：
 
 ### 10.5 patch 与 prediction
 
-- patch 必须是官方可应用的 unified diff；
+- patch 必须是相对 case `base_commit` 生成、官方可应用的 unified diff；
+- patch 应排除构建产物、缓存、无关未跟踪文件和仅用于自检的临时测试文件；
 - empty patch 需要显式记录；
 - predictions 文件必须覆盖所有进入评测分母的 case；
 - patch 文件单独归档，不内嵌到报告正文。
@@ -253,7 +264,10 @@ baseline 和 native 两条链路共享：
 - 调用官方 local harness；
 - 保存原始 harness 输出和 per-case logs；
 - 将官方结果导入统一 case-level schema；
-- 明确 resolved、unresolved、empty patch、error、incomplete 的互斥规则。
+- 每个 case 最终只能有一个主状态；
+- 工程原因导致的 `infra_error` / `incomplete` 需要修复后重跑，不能作为最终对外报告的未处置状态；
+- patch apply failed 默认归入 agent 产物无效类 unresolved；只有能证明是 harness、镜像、数据或环境问题时，
+  才归入 infra/data baseline issue 并修复后重跑。
 
 ### 10.7 报告生成
 
@@ -293,12 +307,17 @@ comparison.md
 - main repo commit；
 - dataset id 和 revision；
 - case list hash；
+- `hints_text` 使用口径；
+- mini-SWE-agent commit 和配置；
+- SWE-Bench package / harness version；
+- per-repo Docker image tag 和 digest，或可追溯到 digest 的镜像清单；
 - model strategy；
 - endpoint identifier；
+- model parameters；
 - verifier 类型和版本；
 - concurrency；
 - step/token/time limits；
-- start/end time。
+- start/end time，使用 UTC 或显式时区。
 
 `cases.jsonl` 至少包含：
 
@@ -316,6 +335,9 @@ comparison.md
 默认保留完整证据链，但不默认归档所有 case 的完整 workspace。考虑到本需求很可能需要多轮排查，异常
 case、分歧 case、infra/data baseline issue、以及人工指定复查 case 可以显式保存 workspace 或更完整
 的现场材料。报告中的 case-level 明细需要能索引到这些复查材料。
+
+归档前必须 scrub secrets，避免模型 endpoint、API key、HTTP headers、临时凭证进入 traces、logs 或
+对外 artifact。
 
 ## 13. 报告要求
 
@@ -382,10 +404,21 @@ benchmark/swebench/results/REPORT.zh_CN.md
 - native agent 跑完 SWE-Bench Verified 500 cases；
 - 两组结果使用同一 dataset snapshot、同一模型策略、同一 official local harness；
 - 每个 case 都有明确状态；
+- 最终对外报告不得包含未处置的 `infra_error` / `incomplete`；工程原因导致的问题必须修复后重跑，
+  或该 run 仅作为内部失败运行记录，不进入最终结论；
 - 中英文报告、结构化结果和 artifact index 完整；
 - aggregate metrics 可从归档材料重新计算。
 
 ## 16. 阶段计划
+
+### 阶段零：环境与 verifier 校准
+
+- 修复或启动 Docker daemon；
+- 安装 Go、Python 依赖和 official SWE-Bench local harness；
+- 固化 workspace/cache 路径；
+- 使用 gold patch 或 known case 验证 local harness 能正确判定。
+
+退出条件：local harness 在专用容器内可稳定运行，并能对已知输入给出可信结果。
 
 ### 阶段一：baseline 校准
 
@@ -459,6 +492,11 @@ benchmark/swebench/results/REPORT.zh_CN.md
    - 对外报告只给出最终 500 case 指标；
    - 同时提供一条可复现路径；
    - 该路径存在即可，不要求缩短或简化路径。
+
+7. `hints_text` 口径：
+   - 跟随 baseline 复现链路；
+   - 如果原版 mini-SWE-agent 复现中使用，则 native agent 也使用；
+   - 如果 baseline 未使用，则整个评测都不使用。
 
 ## 18. 当前环境核查记录
 
