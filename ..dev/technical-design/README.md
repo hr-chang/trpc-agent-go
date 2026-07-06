@@ -18,7 +18,7 @@ SWE Agent、official local harness 验证、结果归档和中英文报告生成
 
 dataset、verifier、archive、report 是两条主线共用的公共底座，不单独作为第三个能力目标。
 
-## 3. 总体架构
+## 3. 总体实现思路
 
 ```text
 SWE-Bench Verified dataset
@@ -45,6 +45,14 @@ SWE-Bench Verified dataset
   -> comparison.json / cases.jsonl
   -> REPORT.md / REPORT.zh_CN.md
 ```
+
+实现时按“先能跑、再可信、再优化”的顺序推进：
+
+1. 先把公共底座做薄：能加载 500 case、写 run config、调用 local harness、导入结果；
+2. 再把 mini-SWE-agent 包起来：不改其 agent 行为，只负责配置、启动、收集和转换输出；
+3. 然后实现 native 最小闭环：一个 case 进 Docker testbed，模型循环执行命令，最后提取 patch；
+4. 等 baseline/native 都能被同一 importer 消费后，再进入差异分析和 native 优化；
+5. full run 只复用 smoke/subset 已验证的命令，不另写一套批处理逻辑。
 
 ## 4. 设计原则
 
@@ -138,34 +146,56 @@ native 实现与优化命令：
 go run ./trpc-agent-go-impl run-native
 ```
 
+CLI 内部建议按以下包边界实现：
+
+```text
+cmd/                 子命令、flag、退出码
+internal/config/     run_config 读写、默认值、路径解析
+internal/dataset/    SWE-Bench Verified loader 和 case list hash
+internal/baseline/   mini-SWE-agent wrapper 与输出转换
+internal/native/     tRPC-Agent-Go agent loop
+internal/workspace/  Docker testbed / local clone workspace
+internal/patch/      git diff、patch 过滤、patch stats
+internal/verifier/   official local harness wrapper
+internal/archive/    run artifact 写入、resume index、secret scrub
+internal/report/     comparison 和中英文报告生成
+```
+
+每个命令只组合这些包，不在 command handler 里堆业务逻辑。这样 baseline 和 native 可以共用
+dataset、patch、verifier、archive、report。
+
 ## 7. 实施顺序
 
 1. 公共底座校准：
-   - `doctor` 结果；
-   - Docker/SWE-Bench harness smoke 记录；
-   - dataset loader smoke；
-   - run config 模板。
+   - 实现 `doctor`，实际执行 Python/Go/Git/Docker/model endpoint 探测；
+   - 实现 `prepare-data`，拉取 dataset revision，生成 500 case list 和 hash；
+   - 实现 `verify`，用一条 known prediction 调通 official local harness；
+   - 实现 `import` 的最小版本，把 harness 输出映射为主状态；
+   - 实现 `report` 的最小版本，从 `comparison.json` 生成表格。
 
 2. baseline 复现：
-   - mini-SWE-agent smoke predictions；
-   - baseline trajectory 导入；
-   - baseline harness smoke；
-   - baseline-only summary。
+   - 固定 mini-SWE-agent commit；
+   - 生成 mini 配置；
+   - 串行跑 1-10 case；
+   - 转换 predictions 和 trajectory；
+   - local harness 验证；
+   - 导入 baseline-only summary。
 
 3. native 实现并优化：
-   - native smoke predictions；
-   - trace/usage/patch 归档；
-   - native harness smoke；
-   - 与 baseline 同 schema 的 case-level result；
-   - 基于 baseline/native 差异做定点优化。
+   - 实现 Docker testbed workspace；
+   - 实现 bash tool；
+   - 实现 agent loop 和 submit/patch extraction；
+   - 串行跑 1-10 case；
+   - local harness 验证；
+   - 用 baseline resolved/native unresolved case 做定点优化。
 
 4. 最终合流：
-   - baseline 500 case run；
-   - native 500 case run；
-   - 两组 official local harness report；
-   - `cases.jsonl`、`comparison.json`、`comparison.md`；
-   - `README.md`、`REPORT.md`、`REPORT.zh_CN.md`；
-   - benchmark PR 和主仓库 submodule 指针更新。
+   - 用同一 case list 跑 baseline 500；
+   - 用同一 case list 跑 native 500；
+   - 分别调用 local harness；
+   - 用同一 importer 生成 `cases.jsonl` 和 `comparison.json`；
+   - 用同一 report generator 生成中英文报告；
+   - benchmark PR 合入后更新主仓库 submodule 指针。
 
 ## 8. 当前开放点
 

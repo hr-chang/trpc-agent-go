@@ -95,6 +95,37 @@ go run ./trpc-agent-go-impl run-native \
 后续可以替换或增强 runner、tool、context management、patch strategy，但必须保持 prediction 和 trace
 contract 不变。
 
+建议实现 `native.RunCase(instance)`，单 case 流程如下：
+
+```text
+load instance
+  -> create workspace
+  -> build prompt
+  -> start trace
+  -> loop:
+       call model
+       parse action
+       execute tool
+       append observation
+       update usage
+       stop if submit / budget exhausted / fatal error
+  -> extract patch
+  -> write prediction
+  -> write trace / usage / duration
+  -> cleanup or preserve workspace
+```
+
+第一版 action protocol 可以从单一 bash tool 起步：
+
+```json
+{
+  "thought": "short reasoning",
+  "command": "pytest tests/..."
+}
+```
+
+提交协议建议显式化，例如模型输出 `submit` action 或写入 sentinel 文件。不要靠最后一次普通命令的输出猜测 patch。
+
 ## 6. workspace 与执行环境
 
 支持两种执行环境：
@@ -112,6 +143,27 @@ contract 不变。
 - start/end time；
 - error reason。
 
+### 6.1 docker-testbed
+
+实现 `workspace.DockerTestbed`：
+
+- 根据 `instance_id` 和 SWE-Bench metadata 定位 testbed image；
+- 使用 `DOCKER_HOST=tcp://localhost:2375` 启动容器；
+- 工作目录固定为 `/testbed`；
+- 执行命令统一走非交互 `bash -lc`；
+- 注入必要环境变量，例如 `BASH_ENV`、Git safe directory、thread 限制规避变量；
+- 每个 command 设置 timeout；
+- case 结束后按配置删除容器或保留现场。
+
+### 6.2 local-clone
+
+`local-clone` 只用于调试 loader、prompt、patch extraction 等轻量问题：
+
+- checkout `base_commit`；
+- 在本机目录执行命令；
+- 不作为最终 verifier 环境；
+- 结果不得直接进入最终报告。
+
 ## 7. patch 生成
 
 patch 提取规则：
@@ -121,6 +173,23 @@ patch 提取规则：
 - 排除构建产物、缓存、临时测试文件和无关未跟踪文件；
 - patch apply failed 默认归为 agent 产物问题，除非证明是 harness/image/data/env 问题；
 - `empty_patch` 单独归类。
+
+实现 `patch.Extract(workspace)`：
+
+1. 确认工作区在 `base_commit` 或等价初始状态；
+2. 执行 `git status --short`，记录 changed files；
+3. 执行 `git diff --binary` 或 official harness 兼容的 unified diff；
+4. 过滤明显无关文件；
+5. 若 diff 为空，写空 patch 并标记 `empty_patch` 候选；
+6. 若 git diff 失败，不把错误输出写成 patch，而是记录 extraction error。
+
+patch extraction 是 native 成败的关键路径，需要单测覆盖：
+
+- 正常 modified file；
+- 新增 tracked file；
+- 未跟踪缓存文件；
+- 空 diff；
+- git diff 失败。
 
 ## 8. 优化方法
 
@@ -142,7 +211,39 @@ native 优化围绕同一套证据链进行：
 5. 扩到 11-100 case subset；
 6. 进入 full batch。
 
-## 9. 归档要求
+### 8.1 差异分析方法
+
+每轮优化先选 case，再改代码：
+
+1. 找 baseline resolved/native unresolved；
+2. 对比两边 problem input、prompt、tool observation、patch；
+3. 判断差异属于环境、协议、上下文、工具、patch extraction 还是模型行为；
+4. 只修复可解释的差异；
+5. 用同一 subset 重跑验证；
+6. 把优化前后结果写入内部 comparison。
+
+### 8.2 优化方向
+
+优先级从高到低：
+
+1. 执行环境对齐：Docker testbed、工作目录、shell 初始化、timeout、错误格式；
+2. 提交协议稳定：模型明确 submit，runner 可靠提取 patch；
+3. context 控制：避免无关日志淹没关键信息；
+4. tool observation：保证命令输出既足够诊断，又不会无限膨胀；
+5. prompt/scaffold：只在有 case evidence 时调整。
+
+## 9. 错误处理
+
+native 错误分层处理：
+
+- model error：记录 API error、retry 次数和最后一次请求 id；
+- action parse error：给模型一次格式修正机会，超过限制记 failure reason；
+- command timeout：记录 timeout，不直接终止整个 batch；
+- workspace error：优先归为工程问题，修复后重跑；
+- patch extraction error：不生成伪 patch，记录失败并进入 importer；
+- budget exhausted：标记 `incomplete`，内部排查后决定是否提高预算或重跑。
+
+## 10. 归档要求
 
 必须归档：
 
@@ -160,7 +261,7 @@ native 优化围绕同一套证据链进行：
 
 trace 需要足够支撑复查，但归档前必须 scrub secrets。
 
-## 10. 验收
+## 11. 验收
 
 smoke 验收：
 
@@ -183,7 +284,7 @@ full 验收：
 - 未处置的 `infra_error` / `incomplete` 不进入最终结论；
 - native 结果、用量、耗时和失败分类可由归档材料复核。
 
-## 11. 风险与复查
+## 12. 风险与复查
 
 重点风险：
 

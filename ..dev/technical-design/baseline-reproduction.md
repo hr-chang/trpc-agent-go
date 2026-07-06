@@ -89,6 +89,48 @@ prepare-data
   -> import baseline result
 ```
 
+具体实现分三层：
+
+1. 配置层：根据本项目 run config 生成 mini-SWE-agent 可识别的配置；
+2. 启动层：按 case list 调用 mini-SWE-agent batch runner；
+3. 转换层：把 mini 原始输出转换为本项目统一 predictions、trace、usage、duration。
+
+### 5.1 配置生成
+
+实现 `baseline.BuildMiniConfig(runConfig, cases)`：
+
+- 写入模型名、endpoint、temperature、max tokens 等参数；
+- 写入 step/time/token limit；
+- 写入 case list 或 instance filter；
+- 写入 `hints_text` 使用口径；
+- 写入输出目录；
+- 记录 mini-SWE-agent commit 和配置文件 hash。
+
+生成后的配置必须归档，不能只存在临时目录。
+
+### 5.2 启动 mini-SWE-agent
+
+实现 `baseline.RunMini(config)`：
+
+- 使用外部进程调用 mini-SWE-agent，不把 mini 代码嵌入 Go；
+- stdout/stderr 同时写日志文件；
+- 每个 case 完成后落盘中间结果，支持 resume；
+- 进程级失败保留 exit code 和命令行；
+- 大于 10 case 时使用已确认的 agent 生成并发。
+
+### 5.3 输出转换
+
+实现 `baseline.ImportMiniOutput(rawDir)`：
+
+- 找到 mini 原始 trajectory；
+- 提取或转换 `model_patch`；
+- 生成 official harness 需要的 `predictions/baseline.jsonl`；
+- 提取 usage 和 duration；
+- 将每个 case 的 trace 写入 `traces/baseline/<instance_id>.json`；
+- 将 patch 写入 `patches/baseline/<instance_id>.patch`。
+
+转换器必须保留转换前原始文件路径，方便复查。
+
 ## 6. 归档要求
 
 必须归档：
@@ -107,7 +149,17 @@ prepare-data
 
 如 baseline 复现需要格式转换，必须记录转换前后的文件路径和转换逻辑版本。
 
-## 7. 校准与验收
+## 7. 错误处理
+
+baseline 复现中的错误按来源处理：
+
+- mini 进程失败：记录 process error，case 暂记 `incomplete`，修复后重跑；
+- 单 case 无 trajectory：记录 missing trajectory，优先检查 mini resume/index；
+- patch 为空：进入 `empty_patch` 候选，仍交由 importer 统一判定；
+- predictions 格式非法：converter 失败，不进入 verifier；
+- harness 失败：由公共底座判断是 `infra_error` 还是 patch/result 问题。
+
+## 8. 校准与验收
 
 smoke 验收：
 
@@ -124,7 +176,7 @@ full 验收：
 - 未处置的 `infra_error` / `incomplete` 不进入最终结论；
 - baseline 结果、用量、耗时和失败分类可由归档材料复核。
 
-## 8. 风险与复查
+## 9. 风险与复查
 
 重点风险：
 

@@ -27,22 +27,44 @@
 
 ### doctor
 
-检查环境是否能进入 smoke/full run：
+实现为一组实际探测命令，而不是只打印配置。每个探测项输出 `ok/warn/fail`、原始值和修复建议。
 
-- Python、Go、Git、mini-SWE-agent、SWE-Bench package；
-- Docker 访问方式，当前专用容器需要 `DOCKER_HOST=tcp://localhost:2375`；
-- Docker daemon version、Docker Root Dir、可用磁盘；
-- Hugging Face、GitHub、PyPI、Docker registry 网络访问；
-- 模型 endpoint 连通性和 usage 字段可用性。
+需要执行：
+
+- `python --version`、`go version`、`git --version`；
+- `python -c "import swebench"`，读取 SWE-Bench package version；
+- `DOCKER_HOST=tcp://localhost:2375 docker info`，读取 server version、Docker Root Dir、CPU、memory；
+- `df -h` 检查 workspace/cache 目标路径；
+- 对 Hugging Face、GitHub、PyPI、Docker registry 做轻量连通性检查；
+- 对模型 endpoint 发一个最小 completion 请求，确认认证、模型名、usage 字段；
+- 检查 `results/runs/<run_id>` 是否可写，避免 full run 中途才发现路径问题。
+
+输出写入：
+
+```text
+results/runs/<run_id>/doctor.json
+results/runs/<run_id>/doctor.log
+```
 
 ### prepare-data
 
-固化数据集快照和 case list：
+实现方式：
 
-- 加载 `princeton-nlp/SWE-bench_Verified` 的 `test` split；
-- 输出排序后的 500 个 `instance_id`；
-- 生成 `cases.jsonl` 和 `cases.sha256`；
-- 记录 dataset id、revision、loader version 和 `hints_text` 使用口径。
+1. 通过 Hugging Face datasets 或等价官方加载方式读取
+   `princeton-nlp/SWE-bench_Verified` 的 `test` split；
+2. 只把 agent 运行需要的安全字段写入内部 case manifest；
+3. gold `patch`、`test_patch`、`FAIL_TO_PASS`、`PASS_TO_PASS` 不进入 agent 输入文件；
+4. 按 `instance_id` 排序输出 500 case；
+5. 计算 case list hash；
+6. 把 dataset revision、loader version、`hints_text` 使用口径写入 `run_config.json`。
+
+输出：
+
+```text
+benchmark/swebench/data/cases.jsonl
+benchmark/swebench/data/cases.sha256
+results/runs/<run_id>/run_config.json
+```
 
 case list hash 采用规范化算法：
 
@@ -65,9 +87,20 @@ python -m swebench.harness.run_evaluation \
 
 要求：
 
+- wrapper 不解释测试语义，只负责启动 official local harness；
 - baseline/native 分别生成 harness report；
 - 保存原始 report、logs、stdout/stderr 和命令参数；
-- harness 并发与 agent 生成并发分开记录。
+- harness 并发与 agent 生成并发分开记录；
+- 失败时保留完整命令、exit code 和日志路径，供 import 判断 `infra_error` 或 `incomplete`。
+
+实现细节：
+
+1. 根据 `--target baseline|native` 选择 predictions 文件；
+2. 为 harness 生成独立 `run_id`，避免 baseline/native report 混写；
+3. 设置 `DOCKER_HOST=tcp://localhost:2375`；
+4. 执行 `python -m swebench.harness.run_evaluation`；
+5. 将 harness 输出目录复制或索引到 `local-harness-report/<target>/`；
+6. 写入 `verifier_manifest.json`，记录 swebench version、Docker version、`--max_workers`、命令行和时间。
 
 ### import
 
@@ -78,6 +111,19 @@ python -m swebench.harness.run_evaluation \
 - 按统一判定优先级生成主状态；
 - 输出 `cases.jsonl` 和 `comparison.json`。
 
+实现步骤：
+
+1. 读取 `data/cases.jsonl` 作为分母；
+2. 读取 baseline/native predictions，按 `instance_id` 建索引；
+3. 读取 patches/traces/usage/duration；
+4. 解析 harness report，得到每个 prediction 的 resolved/unresolved/error 原始结果；
+5. 对 baseline/native 分别执行主状态判定；
+6. 计算 patch stats；
+7. 输出规范化 `cases.jsonl`；
+8. 从 `cases.jsonl` 聚合生成 `comparison.json` 和 `comparison.md`。
+
+importer 必须把“缺记录”当作错误处理，不能静默跳过 case。500 case 分母必须完整。
+
 ### report
 
 从结构化结果生成报告：
@@ -87,9 +133,47 @@ python -m swebench.harness.run_evaluation \
 - 同一份 `comparison.json` 作为数据源；
 - 报告包含总体 resolved rate、五类主状态、per-repo 结果、失败分类、资源使用和复现路径。
 
-## 3. 数据 schema
+实现方式：
 
-### 3.1 run_config.json
+- report generator 只读取 `comparison.json`、`cases.jsonl` 和 artifact index；
+- 中英文报告共用同一份结构化数据；
+- 报告正文不内嵌完整 patch，只链接 patch artifact；
+- smoke/subset/internal failed run 不写入最终对外报告，只作为内部记录。
+
+## 3. 公共模块实现
+
+### 3.1 config
+
+负责：
+
+- 合并 CLI flags、环境变量和默认值；
+- 生成 `run_config.json`；
+- 校验 baseline/native 是否使用同一 dataset、模型策略和 verifier；
+- 在 full run 前阻止缺失关键字段的配置进入运行。
+
+### 3.2 archive
+
+负责：
+
+- 创建 `results/runs/<run_id>`；
+- 为每个 case 生成标准 artifact 路径；
+- 写入 run manifest；
+- 支持 resume：已完成 case 不重复运行，除非显式 `--rerun`；
+- 执行 secret scrub。
+
+### 3.3 patch
+
+负责：
+
+- 读取 patch 文件；
+- 计算 changed files、added/deleted lines；
+- 检查 patch 是否为空；
+- 检查是否包含明显不应提交的构建产物、缓存、临时测试；
+- 只做结构检查，不替代 official harness。
+
+## 4. 数据 schema
+
+### 4.1 run_config.json
 
 ```json
 {
@@ -131,7 +215,7 @@ python -m swebench.harness.run_evaluation \
 }
 ```
 
-### 3.2 cases.jsonl
+### 4.2 cases.jsonl
 
 每行一条 case，baseline/native 各自记录一个主状态：
 
@@ -183,7 +267,7 @@ python -m swebench.harness.run_evaluation \
 }
 ```
 
-## 4. 状态判定
+## 5. 状态判定
 
 状态判定对象是一个 agent-case pair。baseline 和 native 对同一个 case 分别判定，主状态集合固定为：
 
@@ -200,7 +284,7 @@ resolved | unresolved | empty_patch | infra_error | incomplete
 
 最终对外报告不得包含未处置的 `infra_error` / `incomplete`。这些状态只能进入内部失败运行记录，或在修复后重跑。
 
-## 5. 防作弊与输入隔离
+## 6. 防作弊与输入隔离
 
 runner 必须保证 agent 输入不包含：
 
@@ -218,7 +302,7 @@ runner 必须保证 agent 输入不包含：
 
 归档 trace 时需要 scrub secrets，避免 API key、Authorization header、临时凭证进入结果目录。
 
-## 6. 并发与资源
+## 7. 并发与资源
 
 并发分两类：
 
@@ -242,7 +326,7 @@ runner 必须保证 agent 输入不包含：
 - 模型 endpoint smoke；
 - resume/retry 策略验证。
 
-## 7. 复查材料
+## 8. 复查材料
 
 需要重点复查的 case：
 
