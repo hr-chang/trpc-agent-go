@@ -31,8 +31,7 @@
 - empty patch：Agent 未产出有效 patch，仍计入 500 case 分母。
 - error：Agent run、patch 应用、验证流程或基础设施出现错误。
 - incomplete：case 未完成运行或未进入最终可判定状态。
-- baseline：用于对比的既有 Agent 实现；当前默认候选为 mini-SWE-agent，但需求不排除后续增加
-  其他 baseline。
+- baseline：用于对比的既有 Agent 实现；本需求第一版使用 mini-SWE-agent。
 - native agent：基于 `tRPC-Agent-Go` 实现的 Go-native SWE Agent。
 - local harness：SWE-Bench 官方本地 Docker 验证流程，即
   `swebench.harness.run_evaluation`。
@@ -52,7 +51,7 @@
 
 非硬约束：
 
-- 不限定最终模型必须是 GLM-5，也不限定必须是单模型；
+- 不限定最终模型必须是 GLM-5；当前默认单模型，若后续改为多模型需重新确认；
 - 不限定 native agent 必须采用 bash-only、固定 Go CLI 或固定 runner 形态；
 - 不限定具体 workspace、sandbox、patch extraction、trace schema 的内部实现，只要求最终 artifact
   满足报告和复核需要；
@@ -163,20 +162,19 @@ python -m swebench.harness.run_evaluation \
 
 ## 8. 模型与对比基线
 
-需求层面不限定必须使用 GLM-5。最终模型可能是 GLM-5，也可能是多模型组合，具体选择在落地阶段根据
-模型可用性、成本、稳定性、endpoint 能力、工程接入难度和评测公平性综合决定。
+默认采用单模型评测。具体模型不在需求层面绑定 GLM-5，最终按模型可用性、成本、稳定性、endpoint
+能力、工程接入难度和评测公平性综合决定。
 
 需求层面只规定公平性原则：
 
 - baseline 和 native agent 必须使用同一套已确认模型策略；
-- 如果采用单模型，两组都使用同一模型和同一 endpoint；
-- 如果采用多模型，两组必须使用同一模型集合、路由规则和预算限制；
+- 默认情况下，两组都使用同一模型和同一 endpoint；
+- 如果后续因工程原因调整为多模型策略，需要重新确认，并确保两组使用同一模型集合、路由规则和预算限制；
 - 模型名称、版本、endpoint、参数、usage 字段必须写入 `run_config.json`；
 - 公开 leaderboard 结果只作为背景引用，不替代本项目重跑结果。
 
-baseline 默认候选为 mini-SWE-agent，因为它是强基线、结构简单，且已有 SWE-Bench batch runner。
-这不是唯一可接受 baseline；如果后续为了解释力或工程公平性需要增加 SWE-agent、OpenHands 或内部
-Agent，可在报告中并列说明。
+baseline 使用 mini-SWE-agent。选择它的原因是结构简单、有 SWE-Bench batch runner，且有官方结果可作
+背景对比锚点。第一版不增加其他 baseline，避免扩大对比矩阵和解释成本。
 
 native agent 不要求复刻 mini-SWE-agent。第一版可以参考 mini-SWE-agent 的最小可比行为来降低解释
 成本，但允许使用 `tRPC-Agent-Go` 更自然的 runner、tool、workspace、sandbox、trace 设计，只要最终
@@ -221,8 +219,7 @@ baseline 和 native 两条链路共享：
 
 ### 10.2 baseline 运行
 
-- 默认支持原版 mini-SWE-agent batch run；
-- 允许按同一公平性原则扩展其他 baseline；
+- 支持原版 mini-SWE-agent batch run；
 - 保留 trajectory、prediction、usage、duration；
 - 支持导入 baseline 原始输出并转换为统一归档格式。
 
@@ -269,9 +266,9 @@ baseline 和 native 两条链路共享：
 - 可复现：报告中的关键指标必须能由归档材料重新计算。
 - 可恢复：长时间 batch run 中断后，应能识别已完成 case 并继续或重跑指定 case。
 - 可审计：每个 case 都有 patch、trace、usage、duration、verifier reference。
-- 可解释：失败分类要能支撑人工复查，而不是只给一个失败总数。
+- 可解释：失败分类和归档材料要支撑人工复查，而不是只给一个失败总数。
 - 可控成本：每个 run 必须记录 token、API calls、duration、retry/error 次数。
-- 可控并发：正式全量运行前需要确认并发策略。
+- 可控并发：正式 batch 默认并发 15，整体并发上限 20；如需调整，需要记录原因。
 
 ## 12. 运行与归档要求
 
@@ -316,7 +313,9 @@ comparison.md
 - patch line stats，例如 `+N/-M`；
 - error 或 incomplete reason。
 
-默认不归档完整 workspace。workspace 只在调试阶段临时保留，或在异常 case 需要深度复查时显式保存。
+默认保留完整证据链，但不默认归档所有 case 的完整 workspace。考虑到本需求很可能需要多轮排查，异常
+case、分歧 case、infra/data baseline issue、以及人工指定复查 case 可以显式保存 workspace 或更完整
+的现场材料。报告中的 case-level 明细需要能索引到这些复查材料。
 
 ## 13. 报告要求
 
@@ -341,6 +340,9 @@ benchmark/swebench/results/REPORT.zh_CN.md
 - artifact 路径说明；
 - 复现命令。
 
+对外报告只给出最终 500 case 指标和必要的复现路径。smoke、calibration、失败排查过程可以作为内部
+工程记录保存，但不作为对外主结论。
+
 ## 14. 成本与并发策略
 
 成本不在需求层面绑定某个公开 API 价格。报告按实际模型策略记录资源使用：
@@ -359,9 +361,10 @@ benchmark/swebench/results/REPORT.zh_CN.md
 
 - 每个 instance 都必须配置 step/action、token、time limits 或等价预算限制；
 - 10 个以内 case 可默认串行；
-- 超过 10 个 case 的正式运行前，需要确认并发规模；
 - 当前整体并发上限为 20；
-- 正式 batch 初始建议并发 15，预留 5 给 smoke/demo 或异常复查。
+- 正式 batch 并发按 15 执行，预留 5 给 smoke/demo 或异常复查。
+- 若出现明显资源争用、harness timeout 或模型服务稳定性问题，工程侧可以下调并发，并在
+  `run_config.json` 和报告中记录原因。
 
 ## 15. 验收标准
 
@@ -422,33 +425,40 @@ benchmark/swebench/results/REPORT.zh_CN.md
 
 退出条件：需求三件套和证据链完整，可进入一次性对外宣发准备。
 
-## 17. 需要需求方决策的事项
+## 17. 已确认决策
 
-这里只保留会影响方向、成本或对外解释的大决策；实现细节默认由工程侧推断并在必要处确认。
+以下是当前已确认的大决策。实现细节默认由工程侧基于这些规则推断，仅在影响方向、成本或对外解释时再
+向需求方确认。
 
 1. 模型策略边界：
-   - 需要确认最终是单模型公平对比，还是允许多模型策略；
-   - 如果允许多模型，需要确认是否接受 baseline/native 使用同一套路由规则，而不是强制单一模型。
+   - 默认单模型测试；
+   - 具体模型落地阶段再定，不在需求层绑定 GLM-5；
+   - baseline/native 必须使用同一模型、endpoint、参数和预算口径。
 
 2. baseline 范围：
-   - 默认以 mini-SWE-agent 作为主 baseline；
-   - 需要确认是否还要增加第二个 baseline，例如 SWE-agent、OpenHands 或已有内部 Agent。
+   - baseline 使用 mini-SWE-agent；
+   - 原因是 mini-SWE-agent 有官方结果可作背景对比，且对比解释成本较低；
+   - 第一版不增加其他 baseline。
 
 3. 资源预算优先级：
-   - 需要确认优先追求较高 resolved rate，还是优先追求可解释、低成本、稳定复现；
-   - 这会影响 step/token/time limits 和是否允许多轮重跑。
+   - 优先追求 resolved rate；
+   - 成本、耗时和稳定性需要记录并可控，但不以牺牲基本能力上限为第一目标。
 
 4. 全量运行并发：
-   - 需要确认正式 500 case batch 的 baseline/native 并发上限；
-   - 当前建议是整体上限 20，正式 batch 先用 15。
+   - 整体并发上限为 20；
+   - 正式 baseline/native batch 默认并发 15；
+   - 预留 5 给 smoke/demo 或异常复查。
 
 5. 证据保留力度：
-   - 默认保留完整证据链，不默认保留完整 workspace；
-   - 需要确认是否有合规或复查要求需要保存部分失败 case workspace。
+   - 有复查要求；
+   - 默认保留完整证据链；
+   - 不默认保存所有完整 workspace，但异常、分歧、infra/data baseline issue 和人工指定复查 case
+     需要可保存更完整现场。
 
 6. 对外报告口径：
-   - 需要确认是否只公布最终全量结果，还是附带 smoke/calibration 过程说明；
-   - 默认对外主报告只承认全量 500 case，smoke/calibration 只作为工程过程。
+   - 对外报告只给出最终 500 case 指标；
+   - 同时提供一条可复现路径；
+   - 该路径存在即可，不要求缩短或简化路径。
 
 ## 18. 当前环境核查记录
 
@@ -482,8 +492,7 @@ ssh root@21.214.124.53.devcloud.woa.com -p 36000
 
 - Docker daemon 当前不可用，必须在进入 full run 前修复。
 - SWE-Bench local harness 对磁盘、Docker、镜像缓存要求高，需要明确 cache 路径。
-- 模型策略未定，可能影响 baseline/native 的公平性解释。
-- 多模型策略会增加报告复杂度和资源消耗。
+- 具体模型未定，可能影响 baseline/native 的公平性解释，需要在 run config 和报告中明确记录。
 - mini-SWE-agent 输出可能需要格式转换后才能稳定喂给 local harness。
 - 旧实验中出现过 internal GLM-5 结果与公开结果差异显著的情况，后续必须优先核查模型版本、
   provider 参数、dataset/image/harness 版本和 case 分母口径。
