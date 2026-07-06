@@ -9,18 +9,38 @@ SWE Agent、official local harness 验证、结果归档和中英文报告生成
 技术方案只固定对外 contract、证据链和运行口径，不把 agent 内部 runner/tool 形态写死。实现可以迭代，
 但最终必须能支撑 500 case 全量评测和可复核报告。
 
-## 2. 总体架构
+工程实施初步拆成两个主交付：
+
+1. baseline 复现：复现 mini-SWE-agent 链路，建立可信参照系；
+2. native 实现并优化：基于 `tRPC-Agent-Go` 实现 Go-native SWE Agent，并围绕 resolved rate 持续优化。
+
+dataset、verifier、archive、report 是两条主线共用的公共底座，不单独作为第三个能力目标。
+
+## 2. 总体拆分与架构
 
 ```text
 SWE-Bench Verified dataset
   -> case list / snapshot
   -> run config
-  -> baseline runner  -> baseline predictions / traces / usage
-  -> native runner    -> native predictions / traces / usage
+
+公共底座：
+  doctor / prepare-data / official local harness / archive / report
+
+主线 A：baseline 复现
+  mini-SWE-agent runner
+  -> baseline predictions / traces / usage
   -> official local harness
-  -> verifier raw reports / logs
-  -> result importer
-  -> cases.jsonl / comparison.json
+  -> baseline case-level results
+
+主线 B：native 实现并优化
+  tRPC-Agent-Go native runner
+  -> native predictions / traces / usage
+  -> official local harness
+  -> native case-level results
+
+最终合流：
+  baseline results + native results
+  -> comparison.json / cases.jsonl
   -> REPORT.md / REPORT.zh_CN.md
 ```
 
@@ -30,7 +50,9 @@ SWE-Bench Verified dataset
 - official local harness 是唯一主验证标准；
 - agent 只可见 `problem_statement` 和 base commit 仓库状态，不可见 gold patch、test patch 或判定测试列表；
 - 运行产物先结构化归档，再从结构化归档生成报告，避免人工改报告造成口径漂移；
-- smoke/subset/full batch 使用同一套命令和 schema，只是 case list 与并发不同。
+- smoke/subset/full batch 使用同一套命令和 schema，只是 case list 与并发不同；
+- baseline 复现优先用于校准环境、数据、模型配置、harness 和报告口径；
+- native full batch 原则上在 baseline 参照系可信后启动，避免把环境问题误判为 agent 能力问题。
 
 ## 3. 仓库与目录
 
@@ -90,16 +112,28 @@ benchmark/swebench/
 
 ## 4. 命令入口
 
-建议实现一个 Go CLI 作为主编排入口，脚本只做环境封装。命令名称可以在实现时调整，但功能边界保持稳定：
+建议实现一个 Go CLI 作为主编排入口，脚本只做环境封装。命令名称可以在实现时调整，但功能边界保持稳定。
+
+公共底座命令：
 
 ```bash
 go run ./trpc-agent-go-impl doctor
 go run ./trpc-agent-go-impl prepare-data
-go run ./trpc-agent-go-impl run-mini
-go run ./trpc-agent-go-impl run-native
 go run ./trpc-agent-go-impl verify
 go run ./trpc-agent-go-impl import
 go run ./trpc-agent-go-impl report
+```
+
+baseline 复现命令：
+
+```bash
+go run ./trpc-agent-go-impl run-mini
+```
+
+native 实现与优化命令：
+
+```bash
+go run ./trpc-agent-go-impl run-native
 ```
 
 ### doctor
@@ -180,6 +214,9 @@ python -m swebench.harness.run_evaluation \
 
 ## 5. 核心模块
 
+模块按“公共底座 + baseline 复现 + native 实现优化”组织。公共底座保证两条主线使用同一输入、验证和归档口径；
+baseline 复现建立参照系；native 主线承载 `tRPC-Agent-Go` 能力实现和指标优化。
+
 ### 5.1 dataset
 
 职责：
@@ -195,7 +232,7 @@ case list hash 采用规范化算法：
 sha256(join(sort(instance_id), "\n") + "\n")
 ```
 
-### 5.2 baseline adapter
+### 5.2 baseline 复现 adapter
 
 职责：
 
@@ -212,7 +249,14 @@ baseline adapter 不应改变以下内容：
 - prompt 语义；
 - patch submission 语义。
 
-### 5.3 native agent
+baseline 复现的完成标准：
+
+- smoke subset 能稳定产出 predictions；
+- predictions 能被 official local harness 验证；
+- trajectory、usage、duration 能导入统一 schema；
+- baseline-only summary 能从归档材料复算。
+
+### 5.3 native 实现与优化 agent
 
 第一版 native agent 建议使用最小 SWE loop：
 
@@ -225,6 +269,13 @@ baseline adapter 不应改变以下内容：
 
 后续可以替换或增强 runner、tool、context management、patch strategy，但必须保持 prediction 和 trace
 contract 不变。
+
+native 优化围绕同一套证据链进行：
+
+- 优先分析 baseline resolved 但 native unresolved 的 case；
+- 对齐必要的执行环境、prompt 输入、submission protocol 和 patch extraction 语义；
+- 保留每轮优化前后的 smoke/subset 结果，避免只凭单 case 观感修改；
+- 优化目标优先是提升 resolved rate，其次才是降低 token、耗时和实现复杂度。
 
 ### 5.4 workspace / execution
 
@@ -459,7 +510,7 @@ runner 必须保证 agent 输入不包含：
 
 ## 11. 实施阶段
 
-### 阶段零：环境校准
+### 阶段零：公共底座校准
 
 输出：
 
@@ -468,7 +519,9 @@ runner 必须保证 agent 输入不包含：
 - dataset loader smoke；
 - run_config 模板。
 
-### 阶段一：baseline 链路
+退出条件：数据加载、Docker/local harness、模型 endpoint、归档目录和基础 schema 都能在 smoke case 上跑通。
+
+### 第一部分：baseline 复现
 
 输出：
 
@@ -477,7 +530,9 @@ runner 必须保证 agent 输入不包含：
 - baseline harness smoke；
 - baseline-only summary。
 
-### 阶段二：native agent 链路
+退出条件：mini-SWE-agent 链路在 smoke/subset 上稳定，baseline 结果能被 official local harness 验证并导入报告 schema。
+
+### 第二部分：native 实现并优化
 
 输出：
 
@@ -486,7 +541,9 @@ runner 必须保证 agent 输入不包含：
 - native harness smoke；
 - 与 baseline 同 schema 的 case-level result。
 
-### 阶段三：全量运行
+退出条件：native agent 能稳定产出 official local harness 可验证 predictions，并完成至少一轮基于 baseline 差异的优化。
+
+### 最终合流：全量运行与报告
 
 输出：
 
@@ -494,10 +551,6 @@ runner 必须保证 agent 输入不包含：
 - native 500 case run；
 - 两组 official local harness report；
 - `cases.jsonl`、`comparison.json`、`comparison.md`。
-
-### 阶段四：交付整理
-
-输出：
 
 - `benchmark/swebench/README.md`；
 - `results/REPORT.md`；
