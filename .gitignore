@@ -39,6 +39,7 @@ pnpm-lock.yaml
 !.github/scripts/run-go-tests.sh
 .DS_Store
 .env
+..dev/local/*.env
 .gomodcache
 next-env.d.ts
 .codebuddy
