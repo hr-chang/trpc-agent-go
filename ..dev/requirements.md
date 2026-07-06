@@ -431,7 +431,7 @@ harness 验证并发：
 
 ### 阶段零：环境与 verifier 校准
 
-- 修复或启动 Docker daemon；
+- 确认 Docker daemon 访问方式、版本兼容性和 Docker 存储空间；
 - 安装 Go、Python 依赖和 official SWE-Bench local harness；
 - 固化 workspace/cache 路径；
 - 使用 gold patch 或 known case 验证 local harness 能正确判定。
@@ -531,23 +531,30 @@ ssh root@21.214.124.53.devcloud.woa.com -p 36000
 - Python：`Python 3.11.6`；
 - Git：`git version 2.41.0`；
 - Docker CLI：`Docker version 29.3.1`；
+- Docker daemon：默认 `/var/run/docker.sock` 不存在；通过 `DOCKER_HOST=tcp://localhost:2375`
+  可访问，server version 为 `19.03.15`；
+- Docker Root Dir：`/var/lib/docker`，需要确认 daemon 侧磁盘容量足以支撑 full run，或调整到大盘路径；
 - Go：未安装；
-- `/root` 挂载约 700GB，可用约 699GB；
+- `/data` 挂载约 700GB，可用约 700GB；
 - `/codev` 挂载约 2TB，可用约 975GB；
-- Docker daemon 当前不可用，`/var/run/docker.sock` 不存在。
 
 后续环境动作：
 
 - 安装 Go；
-- 修复或启动 Docker daemon；
+- 为所有 Docker / local harness 命令显式设置 `DOCKER_HOST=tcp://localhost:2375`；
+- 验证 Docker daemon `19.03.15` 与 SWE-Bench local harness 的兼容性；
+- 确认 Docker Root Dir 对应磁盘容量足够，或将 daemon data-root 调整到大盘路径；
 - 将 SWE-Bench workspace/cache 放到大盘路径；
 - 安装并验证 official SWE-Bench local harness；
 - 用 gold patch 或单个 known case 验证 harness。
 
 ## 附录 B：风险与开放问题
 
-- Docker daemon 当前不可用，必须在进入 full run 前修复。
-- SWE-Bench local harness 对磁盘、Docker、镜像缓存要求高，需要明确 cache 路径。
+- 默认 Docker Unix socket 不可用；必须通过 `DOCKER_HOST=tcp://localhost:2375` 访问 daemon，并在
+  run config 中记录。
+- Docker daemon 版本偏旧且 Docker Root Dir 在 daemon 侧，需要在进入 full run 前验证版本兼容性和
+  daemon 侧磁盘容量。
+- SWE-Bench local harness 对磁盘、Docker、镜像缓存要求高，需要明确 workspace/cache 和 Docker 存储路径。
 - 具体模型未定，可能影响 baseline/native 的公平性解释，需要在 run config 和报告中明确记录。
 - mini-SWE-agent 输出可能需要格式转换后才能稳定喂给 local harness。
 - 旧实验中出现过 internal GLM-5 结果与公开结果差异显著的情况，后续必须优先核查模型版本、
