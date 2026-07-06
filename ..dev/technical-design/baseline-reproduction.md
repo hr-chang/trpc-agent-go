@@ -116,7 +116,7 @@ prepare-data
 - stdout/stderr 同时写日志文件；
 - 每个 case 完成后落盘中间结果，支持 resume；
 - 进程级失败保留 exit code 和命令行；
-- 大于 10 case 时使用已确认的 agent 生成并发。
+- agent 生成并发统一使用 15；实际活跃任务数不超过 case 数。
 
 ### 5.3 输出转换
 
@@ -163,7 +163,7 @@ baseline 复现中的错误按来源处理：
 
 smoke 验收：
 
-- 10 个以内 case 串行可跑通；
+- 10 个以内 case smoke 可跑通；
 - 每个 case 都有 prediction 或明确失败原因；
 - official local harness 可验证 baseline predictions；
 - result importer 可生成 baseline case-level result；

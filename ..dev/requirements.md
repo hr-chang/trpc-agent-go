@@ -388,11 +388,9 @@ benchmark/swebench/results/REPORT.zh_CN.md
 
 agent 生成并发：
 
-- 10 个以内 case 可默认串行；
-- 11 到 100 个 case 视为 smoke/subset，默认并发不超过 5；
-- 101 到 499 个 case 视为 large subset，默认并发不超过 15，且必须在 `run_config.json` 中显式记录；
-- 正式 full batch 指完整 500 case，默认并发 15；
-- agent 生成整体并发上限为 20，预留 5 给 smoke/demo 或异常复查；
+- 全场景默认配置为 15，包括 smoke、subset、large subset 和 full batch；
+- 实际活跃任务数不超过 case 数，例如 3 case smoke 即最多 3 个活跃任务；
+- agent 生成并发不再按 case 规模分档，避免不同规模运行使用不同 agent 调度口径；
 - 若模型服务出现 5xx、限流、耗时异常或 token 使用异常，工程侧可以下调并发，并在 `run_config.json`
   和报告中记录原因。
 
@@ -496,7 +494,7 @@ harness 验证并发：
    - 成本、耗时和稳定性需要记录并可控，但不以牺牲基本能力上限为第一目标。
 
 4. 并发策略：
-   - agent 生成并发：正式 full batch 默认 15，上限 20，预留 5 给 smoke/demo 或异常复查；
+   - agent 生成并发：全场景默认 15，实际活跃任务数不超过 case 数；
    - harness 验证并发：独立于 agent 生成并发，full batch 默认从 15 开始，并按阶段零校准结果调整；
    - 两类并发都必须写入 `run_config.json`。
 

@@ -60,7 +60,7 @@ SWE-Bench Verified dataset
 - official local harness 是唯一主验证标准；
 - agent 只可见 `problem_statement` 和 base commit 仓库状态，不可见 gold patch、test patch 或判定测试列表；
 - 运行产物先结构化归档，再从结构化归档生成报告，避免人工改报告造成口径漂移；
-- smoke/subset/full batch 使用同一套命令和 schema，只是 case list 与并发不同；
+- smoke/subset/full batch 使用同一套命令和 schema；agent 生成并发统一 15，harness 验证并发单独校准；
 - baseline 复现优先用于校准环境、数据、模型配置、harness 和报告口径；
 - native full batch 原则上在 baseline 参照系可信后启动，避免把环境问题误判为 agent 能力问题。
 
@@ -176,7 +176,7 @@ dataset、patch、verifier、archive、report。
 2. baseline 复现：
    - 固定 mini-SWE-agent commit；
    - 生成 mini 配置；
-   - 串行跑 1-10 case；
+   - 跑 1-10 case smoke；
    - 转换 predictions 和 trajectory；
    - local harness 验证；
    - 导入 baseline-only summary。
@@ -185,7 +185,7 @@ dataset、patch、verifier、archive、report。
    - 实现 Docker testbed workspace；
    - 实现 bash tool；
    - 实现 agent loop 和 submit/patch extraction；
-   - 串行跑 1-10 case；
+   - 跑 1-10 case smoke；
    - local harness 验证；
    - 用 baseline resolved/native unresolved case 做定点优化。
 

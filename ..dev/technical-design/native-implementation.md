@@ -265,7 +265,7 @@ trace 需要足够支撑复查，但归档前必须 scrub secrets。
 
 smoke 验收：
 
-- native agent 能完成 10 个以内 case 的串行运行；
+- native agent 能完成 10 个以内 case 的 smoke 运行；
 - 每个 case 都有 patch 或明确失败原因；
 - official local harness 可验证 native predictions；
 - trace、usage、duration、patch stats 能导入统一 schema。

@@ -313,10 +313,10 @@ runner 必须保证 agent 输入不包含：
 
 | 规模 | Agent 生成并发 | Harness 验证并发 |
 | --- | ---: | ---: |
-| <= 10 cases | 1 | <= case count |
-| 11-100 cases | <= 5 | <= 5 |
-| 101-499 cases | <= 15 | <= 15 |
-| 500 full batch | 15，最高 20 | 从 15 开始，按阶段零校准调整 |
+| <= 10 cases | 15，实际活跃任务不超过 case 数 | <= case count |
+| 11-100 cases | 15 | <= 5 |
+| 101-499 cases | 15 | <= 15 |
+| 500 full batch | 15 | 从 15 开始，按阶段零校准调整 |
 
 进入 full run 前必须完成：
 
