@@ -25,11 +25,12 @@ Go-native SWE Agent 及其全量评测结果。
 - prediction：提交给官方 harness 的预测记录，至少包含 `instance_id`、
   `model_name_or_path`、`model_patch`。
 - patch：Agent 生成的 unified diff；官方 harness 会将其应用到对应 base commit。
-- resolved：官方 local harness 判定 patch 解决该 case。
-- unresolved：patch 可验证完成，但未通过官方判定。
-- empty patch：Agent 未产出有效 patch，仍计入 500 case 分母。
-- error：Agent run、patch 应用、验证流程或基础设施出现错误。
-- incomplete：case 未完成运行或未进入最终可判定状态。
+- resolved：非空 patch 经官方 local harness 判定解决该 case。
+- unresolved：非空 patch 完成验证但未解决该 case；patch apply failed 默认属于 unresolved，除非能证明是
+  harness、镜像、数据或环境问题。
+- empty_patch：Agent 完成运行但 `model_patch` 为空；这是独立主状态，先于 harness 的 unresolved 判定。
+- infra_error：基础设施、harness、镜像、网络、数据基线等工程原因导致 case 不能可信判定。
+- incomplete：agent 或 verifier 未完成，case 未进入最终可判定状态。
 - baseline：用于对比的既有 Agent 实现；本需求第一版使用 mini-SWE-agent。
 - native agent：基于 `tRPC-Agent-Go` 实现的 Go-native SWE Agent。
 - local harness：SWE-Bench 官方本地 Docker 验证流程，即
@@ -79,18 +80,15 @@ Go-native SWE Agent 及其全量评测结果。
    - 具体执行形态可采用 bash/workspace、结构化工具、runner 编排或其他等价方案。
 
 2. 全量 500 case 评测报告：
-   - 英文报告：`benchmark/swebench/results/REPORT.md`；
-   - 中文报告：`benchmark/swebench/results/REPORT.zh_CN.md`；
-   - 报告必须基于 SWE-Bench Verified test split 的完整 500 case；
-   - 报告正文索引证据链，不内嵌完整 patch。
+   - 英文报告和中文报告由 §13 定义；
+   - 报告必须基于 SWE-Bench Verified test split 的完整 500 case。
 
 3. 可复现文档：
    - 位置：`benchmark/swebench/README.md`；
    - 说明环境、数据集、模型配置、baseline 运行、native run、local harness 验证、报告生成。
 
 4. 结构化归档：
-   - run config、case-level 结果、predictions、patches、traces、官方 local harness report、
-     comparison files。
+   - 归档内容和字段由 §12 定义。
 
 ## 6. 仓库落点
 
@@ -145,6 +143,9 @@ python -m swebench.harness.run_evaluation \
   --max_workers <num_workers> \
   --run_id <run_id>
 ```
+
+这里的 `--max_workers` 是 official local harness 的验证并发，只影响 Docker/磁盘密集型验证阶段；
+它不是 agent 生成阶段的模型/API 并发。两类并发由 §14 分别定义并在 `run_config.json` 中分别记录。
 
 验证规则：
 
@@ -247,13 +248,13 @@ baseline 和 native 两条链路共享：
 - 执行过程必须有可审计 trace；
 - 若使用命令执行型工具，命令应默认非交互，并记录 command、exit code、stdout/stderr 摘要和 timeout；
 - 若使用非命令型工具，需要记录等价的 action、input、output、error 和耗时；
-- 支持失败后标记 error/incomplete。
+- 支持失败后记录失败原因，并映射到统一主状态。
 
 ### 10.5 patch 与 prediction
 
 - patch 必须是相对 case `base_commit` 生成、官方可应用的 unified diff；
 - patch 应排除构建产物、缓存、无关未跟踪文件和仅用于自检的临时测试文件；
-- empty patch 需要显式记录；
+- `empty_patch` 需要显式记录；
 - predictions 文件必须覆盖所有进入评测分母的 case；
 - patch 文件单独归档，不内嵌到报告正文。
 
@@ -262,7 +263,9 @@ baseline 和 native 两条链路共享：
 - 调用官方 local harness；
 - 保存原始 harness 输出和 per-case logs；
 - 将官方结果导入统一 case-level schema；
-- 每个 case 最终只能有一个主状态；
+- 每个 case 最终只能有一个主状态，主状态集合为
+  `resolved | unresolved | empty_patch | infra_error | incomplete`，五类合计必须等于 500；
+- 主状态判定优先级为：`incomplete` > `infra_error` > `empty_patch` > `resolved/unresolved`；
 - 工程原因导致的 `infra_error` / `incomplete` 需要修复后重跑，不得作为最终对外报告的未处置状态；
 - patch apply failed 默认归入 agent 产物无效类 unresolved；只有能证明是 harness、镜像、数据或环境问题时，
   才归入 infra/data baseline issue 并修复后重跑。
@@ -280,7 +283,7 @@ baseline 和 native 两条链路共享：
 - 可审计：每个 case 都有 patch、trace、usage、duration、verifier reference。
 - 可解释：失败分类和归档材料要支撑人工复查，而不是只给一个失败总数。
 - 可控成本：每个 run 必须记录 token、API calls、duration、retry/error 次数。
-- 可控并发：正式 batch 默认并发 15，整体并发上限 20；如需调整，需要记录原因。
+- 可控并发：agent 生成并发和 harness 验证并发分开配置、分开记录；如需调整，需要记录原因。
 
 ## 12. 运行与归档要求
 
@@ -313,7 +316,8 @@ comparison.md
 - endpoint identifier；
 - model parameters；
 - verifier 类型和版本；
-- concurrency；
+- agent generation concurrency；
+- harness max workers；
 - step/token/time limits；
 - start/end time，使用 UTC 或显式时区。
 
@@ -328,7 +332,8 @@ comparison.md
 - verifier result reference；
 - changed files；
 - patch line stats，例如 `+N/-M`；
-- error 或 incomplete reason。
+- main status；
+- failure reason。
 
 默认保留完整证据链，但不默认归档所有 case 的完整 workspace。异常 case、分歧 case、
 infra/data baseline issue、以及人工指定复查 case 可以保存 workspace 或更完整现场。报告中的
@@ -352,9 +357,9 @@ benchmark/swebench/results/REPORT.zh_CN.md
 - baseline/native 对比；
 - per-repo 结果；
 - failure taxonomy；
-- empty patch、error、incomplete 统计；
+- 五类主状态统计：`resolved`、`unresolved`、`empty_patch`、`infra_error`、`incomplete`；
 - token、API calls、duration 统计；
-- 并发配置；
+- agent 生成并发与 harness 验证并发；
 - 模型策略和 endpoint 标识；
 - case-level 明细索引；
 - artifact 路径说明；
@@ -377,14 +382,29 @@ benchmark/swebench/results/REPORT.zh_CN.md
 - endpoint identifier；
 - 如果 endpoint 提供 cost 字段，则原样归档。
 
-并发规则：
+预算规则：
 
-- 每个 instance 都必须配置 step/action、token、time limits 或等价预算限制；
+- 每个 instance 都必须配置 step/action、token、time limits 或等价预算限制。
+
+agent 生成并发：
+
 - 10 个以内 case 可默认串行；
-- 当前整体并发上限为 20；
-- 正式 batch 并发按 15 执行，预留 5 给 smoke/demo 或异常复查。
-- 若出现明显资源争用、harness timeout 或模型服务稳定性问题，工程侧可以下调并发，并在
-  `run_config.json` 和报告中记录原因。
+- 11 到 100 个 case 视为 smoke/subset，默认并发不超过 5；
+- 101 到 499 个 case 视为 large subset，默认并发不超过 15，且必须在 `run_config.json` 中显式记录；
+- 正式 full batch 指完整 500 case，默认并发 15；
+- agent 生成整体并发上限为 20，预留 5 给 smoke/demo 或异常复查；
+- 若模型服务出现 5xx、限流、耗时异常或 token 使用异常，工程侧可以下调并发，并在 `run_config.json`
+  和报告中记录原因。
+
+harness 验证并发：
+
+- harness 验证并发对应 `swebench.harness.run_evaluation --max_workers`，与 agent 生成并发独立；
+- 10 个以内 case 可设置为不超过 case 数；
+- 11 到 100 个 case 默认不超过 5；
+- 101 到 499 个 case 默认不超过 15，且必须在 `run_config.json` 中显式记录；
+- full batch 默认从 15 开始，但必须以阶段零的 Docker、磁盘和镜像缓存校准结果为准；
+- 若出现 Docker 资源争用、磁盘压力、harness timeout、镜像拉取/构建异常，工程侧可以下调
+  `--max_workers`，并在 `run_config.json` 和报告中记录原因。
 
 ## 15. 验收标准
 
@@ -401,7 +421,7 @@ benchmark/swebench/results/REPORT.zh_CN.md
 - baseline 跑完 SWE-Bench Verified 500 cases；
 - native agent 跑完 SWE-Bench Verified 500 cases；
 - 两组结果使用同一 dataset snapshot、同一模型策略、同一 official local harness；
-- 每个 case 都有明确状态；
+- 每个 case 都有唯一主状态，五类主状态合计为 500；
 - 最终对外报告不得包含未处置的 `infra_error` / `incomplete`；工程原因导致的问题必须修复后重跑，
   或该 run 仅作为内部失败运行记录，不进入最终结论；
 - 中英文报告、结构化结果和 artifact index 完整；
@@ -475,10 +495,10 @@ benchmark/swebench/results/REPORT.zh_CN.md
    - 优先追求 resolved rate；
    - 成本、耗时和稳定性需要记录并可控，但不以牺牲基本能力上限为第一目标。
 
-4. 全量运行并发：
-   - 整体并发上限为 20；
-   - 正式 baseline/native batch 默认并发 15；
-   - 预留 5 给 smoke/demo 或异常复查。
+4. 并发策略：
+   - agent 生成并发：正式 full batch 默认 15，上限 20，预留 5 给 smoke/demo 或异常复查；
+   - harness 验证并发：独立于 agent 生成并发，full batch 默认从 15 开始，并按阶段零校准结果调整；
+   - 两类并发都必须写入 `run_config.json`。
 
 5. 证据保留力度：
    - 有复查要求；
