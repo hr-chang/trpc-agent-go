@@ -6,9 +6,9 @@ baseline 复现用于建立可信参照系。第一版只复现 mini-SWE-agent�
 
 baseline 复现要回答：
 
-- mini-SWE-agent 在本项目固定的数据集、模型策略和 official local harness 下能否稳定运行；
+- mini-SWE-agent 在本项目固定的数据集、模型策略和自建 official local harness 环境下能否稳定运行；
 - mini-SWE-agent 产出的 predictions、trajectory、usage、duration 是否能进入统一归档；
-- 本地复现结果与公开背景结果是否存在明显差异，以及差异是否能被解释。
+- 本地复现结果是否能作为后续 native agent 的公平参照；与公开背景结果的差异只做审计解释。
 
 ## 2. 边界
 
@@ -39,6 +39,7 @@ baseline adapter 只做非语义适配，不主动改造 mini-SWE-agent 的 agen
 - baseline 复现链路决定的 `hints_text` 口径；
 - 已确认模型策略；
 - mini-SWE-agent commit 和配置；
+- 当前冻结的自建 verifier、Docker/testbed image 集合和 harness patch；
 - per-instance step/token/time limit；
 - agent 生成并发配置。
 
@@ -116,7 +117,8 @@ prepare-data
 - stdout/stderr 同时写日志文件；
 - 每个 case 完成后落盘中间结果，支持 resume；
 - 进程级失败保留 exit code 和命令行；
-- agent 生成并发统一使用 15；实际活跃任务数不超过 case 数。
+- agent 生成并发由 run config 显式指定；baseline/native 应复用同一并发策略，实际值按 endpoint
+  健康度校准。
 
 ### 5.3 输出转换
 

@@ -9,6 +9,10 @@ SWE Agent、official local harness 验证、结果归档和中英文报告生成
 技术方案只固定对外 contract、证据链和运行口径，不把 agent 内部 runner/tool 形态写死。实现可以迭代，
 但最终必须能支撑 500 case 全量评测和可复核报告。
 
+本方案不以复刻 SWE-Bench leaderboard 当时的完整测试环境为目标。实现阶段固定当前自建
+official local harness 环境，并要求 baseline 与 native agent 共用同一 dataset、模型策略、
+Docker/testbed image 集合、harness patch、结果导入和报告口径。公开 leaderboard 仅作为背景参考。
+
 ## 2. 工作拆分
 
 工程实施拆成两个主交付：
@@ -57,11 +61,11 @@ SWE-Bench Verified dataset
 ## 4. 设计原则
 
 - baseline 和 native 共用同一 dataset snapshot、case list、模型策略、预算口径和 verifier；
-- official local harness 是唯一主验证标准；
+- 当前冻结的自建 official local harness 环境是唯一主验证标准；
 - agent 只可见 `problem_statement` 和 base commit 仓库状态，不可见 gold patch、test patch 或判定测试列表；
 - 运行产物先结构化归档，再从结构化归档生成报告，避免人工改报告造成口径漂移；
-- smoke/subset/full batch 使用同一套命令和 schema；agent 生成并发统一 15，harness 验证并发单独校准；
-- baseline 复现优先用于校准环境、数据、模型配置、harness 和报告口径；
+- smoke/subset/full batch 使用同一套命令和 schema；agent 生成并发与 harness 验证并发分开校准、分开记录；
+- baseline 复现优先用于固定本项目自建评测环境下的公平参照系；
 - native full batch 原则上在 baseline 参照系可信后启动，避免把环境问题误判为 agent 能力问题。
 
 ## 5. 仓库与目录

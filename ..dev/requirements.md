@@ -44,8 +44,9 @@ Go-native SWE Agent 及其全量评测结果。
 硬约束：
 
 - 必须基于 SWE-Bench Verified `test` split 的完整 500 case 给出最终结论；
-- 必须使用官方 local harness 作为主 verifier；
-- baseline 和 native agent 必须共享同一 dataset snapshot、模型策略、预算口径和验证流程；
+- 必须使用当前冻结的自建 official local harness 环境作为主 verifier；
+- baseline 和 native agent 必须共享同一 dataset snapshot、模型策略、预算口径、Docker/testbed image
+  集合、harness patch 和验证流程；
 - agent 运行输入不得包含官方答案或验证测试信息，包括 gold `patch`、`test_patch`、
   `FAIL_TO_PASS`、`PASS_TO_PASS`；判定测试仅由 official harness 持有；
 - 每个 case 必须有明确状态，并保留足以复算最终指标的证据链；
@@ -58,6 +59,14 @@ Go-native SWE Agent 及其全量评测结果。
 - 不限定 workspace、sandbox、patch extraction、trace schema 的内部实现，只要求最终 artifact
   支撑报告和复核；
 - 不要求普通 PR CI 跑完整 500 case。
+
+评测环境口径：
+
+- 本需求不追求绝对复刻 SWE-Bench leaderboard 当时的测试环境；
+- 官网 leaderboard 结果只作为背景参考，不作为逐 case 对齐目标；
+- 核心对比对象是同一自建评测环境下的 mini-SWE-agent baseline 与 `tRPC-Agent-Go` native agent；
+- 环境差异只要被完整记录、对 baseline/native 一致生效，且 gold patch/known case 能证明 verifier
+  语义可信，就不作为阻塞项。
 
 ## 4. 业务价值
 
@@ -149,7 +158,7 @@ python -m swebench.harness.run_evaluation \
 
 验证规则：
 
-- 官方 local harness 是唯一主验证标准；
+- 当前冻结的自建 official local harness 环境是唯一主验证标准；
 - `sb-cli` 当前不可用，不进入主流程，不作为验收条件；
 - 若未来 `sb-cli` 恢复，可作为补充交叉验证，但不能覆盖 local harness 结论；
 - 没有有效 patch 的 case 也计入 500 case 分母。
@@ -175,7 +184,7 @@ python -m swebench.harness.run_evaluation \
 - 默认情况下，两组都使用同一模型和同一 endpoint；
 - 如果后续因工程原因调整为多模型策略，需要重新确认，并确保两组使用同一模型集合、路由规则和预算限制；
 - 模型名称、版本、endpoint、参数、usage 字段必须写入 `run_config.json`；
-- 公开 leaderboard 结果只作为背景引用，不替代本项目重跑结果。
+- 公开 leaderboard 结果只作为背景引用，不替代本项目重跑 baseline，也不要求逐 case 对齐。
 
 baseline 使用 mini-SWE-agent。它结构简单、有 SWE-Bench batch runner，且有官方结果可作背景参考。
 第一版不增加其他 baseline，避免扩大对比矩阵和解释成本。
@@ -260,7 +269,7 @@ baseline 和 native 两条链路共享：
 
 ### 10.6 verifier 调用与结果导入
 
-- 调用官方 local harness；
+- 调用当前冻结的自建 official local harness 环境；
 - 保存原始 harness 输出和 per-case logs；
 - 将官方结果导入统一 case-level schema；
 - 每个 case 最终只能有一个主状态，主状态集合为
@@ -269,6 +278,8 @@ baseline 和 native 两条链路共享：
 - 工程原因导致的 `infra_error` / `incomplete` 需要修复后重跑，不得作为最终对外报告的未处置状态；
 - patch apply failed 默认归入 agent 产物无效类 unresolved；只有能证明是 harness、镜像、数据或环境问题时，
   才归入 infra/data baseline issue 并修复后重跑。
+- clean-upstream harness 保留为审计工具，用于解释与公开背景结果或当前 harness patch 的差异；它不替代主
+  verifier，也不阻塞 baseline/native 在同一环境下的公平对比。
 
 ### 10.7 报告生成
 
@@ -388,9 +399,10 @@ benchmark/swebench/results/REPORT.zh_CN.md
 
 agent 生成并发：
 
-- 全场景默认配置为 15，包括 smoke、subset、large subset 和 full batch；
-- 实际活跃任务数不超过 case 数，例如 3 case smoke 即最多 3 个活跃任务；
-- agent 生成并发不再按 case 规模分档，避免不同规模运行使用不同 agent 调度口径；
+- agent 生成并发必须显式配置并写入 `run_config.json`；
+- baseline 和 native agent 应使用同一并发策略，除非报告中明确解释差异原因；
+- 具体并发以 endpoint 健康度和长时间稳定性校准为准；15 可作为目标档位或容量充足时的 full batch
+  档位，但不是不变硬约束；
 - 若模型服务出现 5xx、限流、耗时异常或 token 使用异常，工程侧可以下调并发，并在 `run_config.json`
   和报告中记录原因。
 
@@ -494,7 +506,7 @@ harness 验证并发：
    - 成本、耗时和稳定性需要记录并可控，但不以牺牲基本能力上限为第一目标。
 
 4. 并发策略：
-   - agent 生成并发：全场景默认 15，实际活跃任务数不超过 case 数；
+   - agent 生成并发：显式配置并记录；具体值按 endpoint 健康度校准，baseline/native 使用同一策略；
    - harness 验证并发：独立于 agent 生成并发，full batch 默认从 15 开始，并按阶段零校准结果调整；
    - 两类并发都必须写入 `run_config.json`。
 

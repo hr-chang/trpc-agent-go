@@ -1,6 +1,7 @@
 # 公共底座方案
 
-公共底座为 baseline 复现和 native 实现提供同一套 dataset、verifier、archive、report、状态判定和资源口径。
+公共底座为 baseline 复现和 native 实现提供同一套 dataset、verifier、Docker/testbed image
+集合、archive、report、状态判定和资源口径。
 它的目标不是单独证明能力，而是确保两条主线可比、可复核、可重跑。
 
 ## 1. 职责边界
@@ -9,7 +10,7 @@
 
 - 环境检查；
 - 数据集加载和 case list 固化；
-- official local harness 调用；
+- 当前冻结的自建 official local harness 环境调用；
 - 运行结果导入；
 - 证据链归档；
 - 报告生成；
@@ -22,6 +23,10 @@
 - 决定 native agent 的内部 runner/tool 设计；
 - 用自造 verifier 替代 official local harness；
 - 对 full run 指标做人工修正。
+
+公共底座需要记录并冻结当前自建评测环境，包括 SWE-Bench commit、harness patch、Docker image
+digest、host venv 依赖、case list hash 和 verifier 配置。clean-upstream harness 只作为审计/解释工具，
+不作为 baseline/native 主对比口径。
 
 ## 2. 命令入口
 
