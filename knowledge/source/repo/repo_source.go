@@ -495,6 +495,9 @@ func (s *Source) processFile(filePath, repoRoot string, info *repoInfo) ([]*docu
 	if err != nil {
 		return nil, fmt.Errorf("failed to stat file: %w", err)
 	}
+	if fileInfo.Size() == 0 {
+		return nil, nil
+	}
 	fileType := isource.GetFileType(filePath)
 	r, exists := s.readers[fileType]
 	if !exists {

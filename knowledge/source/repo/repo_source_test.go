@@ -338,6 +338,21 @@ message SkipProto { string name = 1; }
 	}
 }
 
+func TestProcessFileSkipsEmptyRepositoryFile(t *testing.T) {
+	repoRoot := t.TempDir()
+	emptyPath := filepath.Join(repoRoot, "empty.proto")
+	writeRepoFile(t, emptyPath, "")
+
+	src := New(WithRepository(Repository{Dir: repoRoot}))
+	docs, err := src.processFile(emptyPath, repoRoot, &repoInfo{name: "demo"})
+	if err != nil {
+		t.Fatalf("processFile() error = %v", err)
+	}
+	if len(docs) != 0 {
+		t.Fatalf("processFile() documents = %d, want 0", len(docs))
+	}
+}
+
 func TestReadDocumentsParserTaskRespectsSubdirFilter(t *testing.T) {
 	repoRoot := t.TempDir()
 	writeRepoFile(t, filepath.Join(repoRoot, "go.mod"), "module example.com/demo\n\ngo 1.21\n")
