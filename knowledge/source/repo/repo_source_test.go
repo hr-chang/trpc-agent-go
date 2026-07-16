@@ -250,6 +250,61 @@ func (s *Service) Do(ctx context.Context) error { return nil }
 	}
 }
 
+func TestReadDocumentsFromMaterializedWorkspaceUsesStableURI(t *testing.T) {
+	repoRoot := t.TempDir()
+	writeRepoFile(t, filepath.Join(repoRoot, "go.mod"), "module example.com/workspace\n\ngo 1.21\n")
+	writeRepoFile(t, filepath.Join(repoRoot, "service.go"), "package workspace\n\nfunc FindUser() {}\n")
+	cleaned := false
+	src := New(
+		WithRepository(Repository{RepoName: "workspace-repo"}),
+		WithMaterializer(materializerFunc(func(context.Context) (*MaterializedRepository, error) {
+			return &MaterializedRepository{
+				Root:      repoRoot,
+				Revision:  "case-revision",
+				StableURI: "workspace://case-123",
+				Cleanup:   func() { cleaned = true },
+			}, nil
+		})),
+	)
+
+	docs, err := src.ReadDocuments(context.Background())
+	if err != nil {
+		t.Fatalf("ReadDocuments() error = %v", err)
+	}
+	if !cleaned {
+		t.Fatal("expected materialized workspace cleanup")
+	}
+	if len(docs) == 0 {
+		t.Fatal("expected repository documents")
+	}
+	for _, doc := range docs {
+		rawURI, ok := doc.Metadata[source.MetaURI].(string)
+		if !ok || !strings.HasPrefix(rawURI, "workspace://case-123/") {
+			t.Fatalf("document URI = %v, want stable workspace URI", doc.Metadata[source.MetaURI])
+		}
+		assertEqual(t, doc.Metadata[source.MetaBranch], "case-revision")
+	}
+}
+
+func TestMaterializerRejectsStaticRepositoryLocation(t *testing.T) {
+	src := New(
+		WithRepository(Repository{Dir: t.TempDir()}),
+		WithMaterializer(materializerFunc(func(context.Context) (*MaterializedRepository, error) {
+			return &MaterializedRepository{Root: t.TempDir()}, nil
+		})),
+	)
+	_, err := src.ReadDocuments(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "must not be combined") {
+		t.Fatalf("ReadDocuments() error = %v, want mutually exclusive input error", err)
+	}
+}
+
+type materializerFunc func(context.Context) (*MaterializedRepository, error)
+
+func (f materializerFunc) Materialize(ctx context.Context) (*MaterializedRepository, error) {
+	return f(ctx)
+}
+
 func TestReadDocumentsSkipsGeneratedFiles(t *testing.T) {
 	repoRoot := t.TempDir()
 	writeRepoFile(t, filepath.Join(repoRoot, "go.mod"), "module example.com/demo\n\ngo 1.21\n")

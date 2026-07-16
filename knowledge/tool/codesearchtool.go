@@ -17,6 +17,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/knowledge"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/searchfilter"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/source"
+	"trpc.group/trpc-go/trpc-agent-go/knowledge/vectorstore"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
@@ -64,6 +65,15 @@ type codeSearchOptions struct {
 	extraExcludeMetadataKeys  []string
 	dedupEnabled              bool
 	maxDedupKeysPerInvocation int
+	searchMode                vectorstore.SearchMode
+}
+
+// WithCodeSearchMode selects vector, keyword, or hybrid retrieval for code
+// search. It is useful for lexical-only indexes and explicit hybrid pipelines.
+func WithCodeSearchMode(mode vectorstore.SearchMode) CodeSearchOption {
+	return func(o *codeSearchOptions) {
+		o.searchMode = mode
+	}
 }
 
 type sourceProvider interface {
@@ -233,6 +243,7 @@ func NewCodeSearchTool(kb knowledge.Knowledge, opts ...CodeSearchOption) tool.To
 		WithToolDescription(description),
 		WithMaxResults(o.maxResults),
 		WithMinScore(o.minScore),
+		WithSearchMode(o.searchMode),
 		WithExcludeMetadataKeys(defaultCodeSearchExcludedMetadataKeys...),
 	}
 	if len(o.extraExcludeMetadataKeys) > 0 {
@@ -250,6 +261,54 @@ func NewCodeSearchTool(kb knowledge.Knowledge, opts ...CodeSearchOption) tool.To
 	}
 
 	return NewAgenticFilterSearchTool(kb, agenticFilterInfo, wrappedOpts...)
+}
+
+// NewCompactCodeSearchTool creates a query-only code search tool. It omits the
+// agent-controlled filter schema and long filter instructions, reducing tool
+// definition tokens for agents that only need repository retrieval.
+func NewCompactCodeSearchTool(kb knowledge.Knowledge, opts ...CodeSearchOption) tool.Tool {
+	o := &codeSearchOptions{
+		toolName:     defaultCodeSearchToolName,
+		maxResults:   defaultMaxResults,
+		minScore:     defaultCodeSearchMinScore,
+		dedupEnabled: true,
+	}
+	for _, opt := range opts {
+		opt(o)
+	}
+	if len(o.repoInfos) == 0 {
+		o.repoInfos = deriveCodeRepoInfos(kb)
+	}
+	description := o.toolDescription
+	if description == "" {
+		description = "Search the indexed workspace for relevant code symbols and files. Use precise identifiers, paths, errors, or behavior terms."
+		if len(o.repoInfos) > 0 {
+			description += buildCodeRepoSection(o.repoInfos)
+		}
+	}
+
+	wrappedOpts := []Option{
+		WithToolName(o.toolName),
+		WithToolDescription(description),
+		WithMaxResults(o.maxResults),
+		WithMinScore(o.minScore),
+		WithSearchMode(o.searchMode),
+		WithExcludeMetadataKeys(defaultCodeSearchExcludedMetadataKeys...),
+	}
+	if len(o.extraExcludeMetadataKeys) > 0 {
+		wrappedOpts = append(wrappedOpts, WithExcludeMetadataKeys(o.extraExcludeMetadataKeys...))
+	}
+	if o.staticFilter != nil {
+		wrappedOpts = append(wrappedOpts, WithFilter(o.staticFilter))
+	}
+	if o.conditionedFilter != nil {
+		wrappedOpts = append(wrappedOpts, WithConditionedFilter(o.conditionedFilter))
+	}
+	if o.dedupEnabled {
+		dedup := newCodeDedupStoreWithCap(o.maxDedupKeysPerInvocation)
+		wrappedOpts = append(wrappedOpts, WithResultPostProcessor(dedup.filter))
+	}
+	return NewKnowledgeSearchTool(kb, wrappedOpts...)
 }
 
 // NewCodeGraphSearchTool creates a code-oriented graph tool set.

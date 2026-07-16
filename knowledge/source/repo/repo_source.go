@@ -43,6 +43,7 @@ type Source struct {
 	skipSuffixes     []string
 	docExtensions    []string
 	parseConcurrency int
+	materializer     Materializer
 }
 
 // Repository describes one repository input and its version/scope configuration.
@@ -255,6 +256,7 @@ type repoInfo struct {
 	name       string
 	url        string
 	branch     string
+	stableURI  string
 	targetKind checkoutTargetKind
 }
 
@@ -284,6 +286,33 @@ func isCodeFileType(fileType string) bool {
 }
 
 func (s *Source) resolveRepository(ctx context.Context, repository Repository) (string, *repoInfo, func(), error) {
+	if s.materializer != nil {
+		if repository.URL != "" || repository.Dir != "" {
+			return "", nil, nil, fmt.Errorf("repository materializer must not be combined with URL or Dir")
+		}
+		materialized, err := s.materializer.Materialize(ctx)
+		if err != nil {
+			return "", nil, nil, fmt.Errorf("failed to materialize repository: %w", err)
+		}
+		if materialized == nil {
+			return "", nil, nil, fmt.Errorf("repository materializer returned nil result")
+		}
+		cleanup := materialized.Cleanup
+		root, err := validateRepositoryDir(materialized.Root)
+		if err != nil {
+			if cleanup != nil {
+				cleanup()
+			}
+			return "", nil, nil, err
+		}
+		info := &repoInfo{
+			name:      chooseRepoName(firstNonEmpty(repository.RepoName, materialized.Name), root, root),
+			url:       chooseRepoURL(repository.RepoURL, materialized.URL),
+			branch:    firstNonEmpty(repository.Commit, repository.Tag, repository.Branch, materialized.Revision),
+			stableURI: strings.TrimRight(materialized.StableURI, "/"),
+		}
+		return root, info, cleanup, nil
+	}
 	if repository.URL == "" && repository.Dir == "" {
 		return "", nil, nil, fmt.Errorf("repository must set either URL or Dir")
 	}
@@ -311,16 +340,9 @@ func (s *Source) resolveRepository(ctx context.Context, repository Repository) (
 		return tmpDir, info, cleanup, nil
 	}
 
-	absPath, err := filepath.Abs(repository.Dir)
+	absPath, err := validateRepositoryDir(repository.Dir)
 	if err != nil {
-		return "", nil, nil, fmt.Errorf("failed to get absolute path: %w", err)
-	}
-	stat, err := os.Stat(absPath)
-	if err != nil {
-		return "", nil, nil, fmt.Errorf("failed to stat repository path: %w", err)
-	}
-	if !stat.IsDir() {
-		return "", nil, nil, fmt.Errorf("repository input must be a directory or git URL: %s", repository.Dir)
+		return "", nil, nil, err
 	}
 	targetKind, _ := resolveCheckoutTarget(repository)
 	info := &repoInfo{
@@ -330,6 +352,21 @@ func (s *Source) resolveRepository(ctx context.Context, repository Repository) (
 		targetKind: targetKind,
 	}
 	return absPath, info, nil, nil
+}
+
+func validateRepositoryDir(dir string) (string, error) {
+	absPath, err := filepath.Abs(dir)
+	if err != nil {
+		return "", fmt.Errorf("failed to get absolute path: %w", err)
+	}
+	stat, err := os.Stat(absPath)
+	if err != nil {
+		return "", fmt.Errorf("failed to stat repository path: %w", err)
+	}
+	if !stat.IsDir() {
+		return "", fmt.Errorf("repository input must be a directory or git URL: %s", dir)
+	}
+	return absPath, nil
 }
 
 func resolveCheckoutTarget(repository Repository) (checkoutTargetKind, string) {
@@ -472,10 +509,6 @@ func (s *Source) processFile(filePath, repoRoot string, info *repoInfo) ([]*docu
 		return nil, fmt.Errorf("failed to build repo-relative path: %w", err)
 	}
 	relPath = filepath.ToSlash(relPath)
-	absPath, err := filepath.Abs(filePath)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get absolute path: %w", err)
-	}
 
 	metadata := s.buildBaseMetadata(repoRoot, info)
 	metadata[source.MetaFilePath] = relPath
@@ -484,7 +517,7 @@ func (s *Source) processFile(filePath, repoRoot string, info *repoInfo) ([]*docu
 	metadata[source.MetaFileSize] = fileInfo.Size()
 	metadata[source.MetaFileMode] = fileInfo.Mode().String()
 	metadata[source.MetaModifiedAt] = fileInfo.ModTime().UTC()
-	metadata[source.MetaURI] = (&url.URL{Scheme: "file", Path: absPath}).String()
+	metadata[source.MetaURI] = repositoryFileURI(repoRoot, relPath, info)
 
 	for _, doc := range documents {
 		if doc.Metadata == nil {
@@ -555,11 +588,19 @@ func (s *Source) processDirectory(dirPath, fileType, repoRoot string, info *repo
 			doc.Metadata[source.MetaFileSize] = fileInfo.Size()
 			doc.Metadata[source.MetaFileMode] = fileInfo.Mode().String()
 			doc.Metadata[source.MetaModifiedAt] = fileInfo.ModTime().UTC()
-			doc.Metadata[source.MetaURI] = (&url.URL{Scheme: "file", Path: absPath}).String()
+			doc.Metadata[source.MetaURI] = repositoryFileURI(repoRoot, relPath, info)
 		}
 		filtered = append(filtered, doc)
 	}
 	return filtered, nil
+}
+
+func repositoryFileURI(repoRoot, relPath string, info *repoInfo) string {
+	if info != nil && info.stableURI != "" {
+		return info.stableURI + "/" + strings.TrimLeft(filepath.ToSlash(relPath), "/")
+	}
+	absPath := filepath.Join(repoRoot, filepath.FromSlash(relPath))
+	return (&url.URL{Scheme: "file", Path: absPath}).String()
 }
 
 func toRelativeRepoPath(repoRoot string, raw any) string {

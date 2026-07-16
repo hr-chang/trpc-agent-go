@@ -24,6 +24,14 @@ func WithRepository(repository Repository) Option {
 	}
 }
 
+// WithMaterializer sets a dynamic workspace provider. A materializer is
+// mutually exclusive with Repository.URL and Repository.Dir.
+func WithMaterializer(materializer Materializer) Option {
+	return func(s *Source) {
+		s.materializer = materializer
+	}
+}
+
 // WithName sets the source name.
 func WithName(name string) Option {
 	return func(s *Source) {

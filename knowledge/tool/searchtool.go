@@ -124,6 +124,15 @@ type options struct {
 	excludeMetadataKeys map[string]struct{}
 	postProcessor       ResultPostProcessor
 	includeContent      bool
+	searchMode          vectorstore.SearchMode
+}
+
+// WithSearchMode sets the retrieval mode used for non-empty queries. The
+// default remains vector search for backward compatibility.
+func WithSearchMode(mode vectorstore.SearchMode) Option {
+	return func(opts *options) {
+		opts.searchMode = mode
+	}
 }
 
 // WithToolName sets the name of the knowledge search tool.
@@ -263,6 +272,7 @@ func NewKnowledgeSearchTool(kb knowledge.Knowledge, opts ...Option) tool.Tool {
 			},
 			MaxResults: opt.maxResults,
 			MinScore:   opt.minScore,
+			SearchMode: opt.searchMode,
 		}
 
 		result, err := kb.Search(ctx, searchReq)
@@ -351,6 +361,7 @@ func NewAgenticFilterSearchTool(
 			},
 			MaxResults: opt.maxResults,
 			MinScore:   opt.minScore,
+			SearchMode: opt.searchMode,
 		}
 
 		// Set search mode based on whether query is provided

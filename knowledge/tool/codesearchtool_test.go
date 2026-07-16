@@ -257,6 +257,36 @@ func TestCodeSearchTool(t *testing.T) {
 	})
 }
 
+func TestNewCompactCodeSearchToolUsesQueryOnlySchemaAndKeywordMode(t *testing.T) {
+	kb := &captureKnowledge{result: &knowledge.SearchResult{Documents: []*knowledge.Result{{
+		Document: &document.Document{ID: "doc-1", Content: "func FindUser() {}"},
+		Score:    0.8,
+	}}}}
+	searchTool := NewCompactCodeSearchTool(
+		kb,
+		WithCodeSearchMode(vectorstore.SearchModeKeyword),
+		WithCodeSearchMaxResults(4),
+	)
+	declaration := searchTool.Declaration()
+	if declaration.Name != "code_search" {
+		t.Fatalf("tool name = %q", declaration.Name)
+	}
+	if len(declaration.InputSchema.Properties) != 1 || declaration.InputSchema.Properties["query"] == nil {
+		t.Fatalf("compact schema properties = %#v", declaration.InputSchema.Properties)
+	}
+
+	res, err := searchTool.(ctool.CallableTool).Call(context.Background(), []byte(`{"query":"FindUser"}`))
+	if err != nil {
+		t.Fatalf("Call() error = %v", err)
+	}
+	if res == nil || kb.lastRequest == nil {
+		t.Fatal("expected search response and captured request")
+	}
+	if kb.lastRequest.SearchMode != vectorstore.SearchModeKeyword || kb.lastRequest.MaxResults != 4 {
+		t.Fatalf("search request = %+v", kb.lastRequest)
+	}
+}
+
 func TestCodeGraphSearchTool(t *testing.T) {
 	t.Run("builds code graph tool set with code-oriented descriptions", func(t *testing.T) {
 		kb := &stubGraphKnowledge{}

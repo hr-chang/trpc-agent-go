@@ -43,6 +43,7 @@ type VectorStore struct {
 	documents  map[string]*document.Document
 	embeddings map[string][]float64
 	mutex      sync.RWMutex
+	bm25       *bm25Index
 
 	// maxResults is the maximum number of search results.
 	maxResults int
@@ -60,6 +61,21 @@ func WithMaxResults(maxResults int) Option {
 			maxResults = defaultMaxResults
 		}
 		vs.maxResults = maxResults
+	}
+}
+
+// WithBM25 enables in-process BM25 keyword search. When enabled, documents may
+// be added without dense embeddings and SearchModeKeyword performs lexical
+// retrieval instead of falling back to filter-only search. SearchModeHybrid
+// combines BM25 and dense rankings with reciprocal rank fusion when a query
+// vector is present, and falls back to BM25 when it is not.
+func WithBM25(enabled bool) Option {
+	return func(vs *VectorStore) {
+		if enabled {
+			vs.bm25 = newBM25Index()
+			return
+		}
+		vs.bm25 = nil
 	}
 }
 
@@ -88,7 +104,7 @@ func (vs *VectorStore) Add(ctx context.Context, doc *document.Document, embeddin
 	if doc.ID == "" {
 		return errDocumentIDCannotBeEmpty
 	}
-	if len(embedding) == 0 {
+	if len(embedding) == 0 && vs.bm25 == nil {
 		return errEmbeddingCannotBeEmpty
 	}
 
@@ -103,8 +119,14 @@ func (vs *VectorStore) Add(ctx context.Context, doc *document.Document, embeddin
 	clonedDoc.UpdatedAt = now
 
 	vs.documents[doc.ID] = clonedDoc
-	vs.embeddings[doc.ID] = make([]float64, len(embedding))
-	copy(vs.embeddings[doc.ID], embedding)
+	if len(embedding) > 0 {
+		vs.embeddings[doc.ID] = append([]float64(nil), embedding...)
+	} else {
+		delete(vs.embeddings, doc.ID)
+	}
+	if vs.bm25 != nil {
+		vs.bm25.upsert(doc.ID, bm25DocumentText(clonedDoc))
+	}
 
 	return nil
 }
@@ -124,7 +146,7 @@ func (vs *VectorStore) Get(ctx context.Context, id string) (*document.Document, 
 	}
 
 	embedding, exists := vs.embeddings[id]
-	if !exists {
+	if !exists && vs.bm25 == nil {
 		return nil, nil, fmt.Errorf("embedding not found: %s", id)
 	}
 
@@ -142,7 +164,7 @@ func (vs *VectorStore) Update(ctx context.Context, doc *document.Document, embed
 	if doc.ID == "" {
 		return errDocumentIDCannotBeEmpty
 	}
-	if len(embedding) == 0 {
+	if len(embedding) == 0 && vs.bm25 == nil {
 		return errEmbeddingCannotBeEmpty
 	}
 
@@ -160,8 +182,14 @@ func (vs *VectorStore) Update(ctx context.Context, doc *document.Document, embed
 	clonedDoc.UpdatedAt = time.Now()
 
 	vs.documents[doc.ID] = clonedDoc
-	vs.embeddings[doc.ID] = make([]float64, len(embedding))
-	copy(vs.embeddings[doc.ID], embedding)
+	if len(embedding) > 0 {
+		vs.embeddings[doc.ID] = append([]float64(nil), embedding...)
+	} else {
+		delete(vs.embeddings, doc.ID)
+	}
+	if vs.bm25 != nil {
+		vs.bm25.upsert(doc.ID, bm25DocumentText(clonedDoc))
+	}
 
 	return nil
 }
@@ -181,6 +209,9 @@ func (vs *VectorStore) Delete(ctx context.Context, id string) error {
 
 	delete(vs.documents, id)
 	delete(vs.embeddings, id)
+	if vs.bm25 != nil {
+		vs.bm25.delete(id)
+	}
 
 	return nil
 }
@@ -198,15 +229,19 @@ func (vs *VectorStore) Search(ctx context.Context, query *vectorstore.SearchQuer
 	case vectorstore.SearchModeFilter:
 		return vs.searchByFilter(ctx, query)
 	case vectorstore.SearchModeHybrid:
-		// For in-memory implementation, hybrid mode falls back to vector search
-		// since we don't have full-text search capabilities
+		if vs.bm25 != nil {
+			return vs.searchHybrid(ctx, query)
+		}
+		// Preserve the historical vector-only fallback unless BM25 is enabled.
 		if len(query.Vector) == 0 {
 			return nil, fmt.Errorf("query vector cannot be empty for hybrid search")
 		}
 		return vs.searchByVector(ctx, query)
 	case vectorstore.SearchModeKeyword:
-		// For in-memory implementation, keyword search is not supported
-		// Fall back to filter search
+		if vs.bm25 != nil {
+			return vs.searchByKeyword(ctx, query)
+		}
+		// Preserve the historical filter-only fallback unless BM25 is enabled.
 		return vs.searchByFilter(ctx, query)
 	default:
 		// Default behavior: require vector for backward compatibility
@@ -329,6 +364,9 @@ func (vs *VectorStore) DeleteByFilter(
 	if deleteAll {
 		vs.documents = make(map[string]*document.Document)
 		vs.embeddings = make(map[string][]float64)
+		if vs.bm25 != nil {
+			vs.bm25 = newBM25Index()
+		}
 		return nil
 	}
 
@@ -358,6 +396,9 @@ func (vs *VectorStore) DeleteByFilter(
 	for _, docID := range toDelete {
 		delete(vs.documents, docID)
 		delete(vs.embeddings, docID)
+		if vs.bm25 != nil {
+			vs.bm25.delete(docID)
+		}
 	}
 
 	return nil
@@ -489,6 +530,7 @@ func (vs *VectorStore) Close() error {
 
 	vs.documents = nil
 	vs.embeddings = nil
+	vs.bm25 = nil
 
 	return nil
 }
