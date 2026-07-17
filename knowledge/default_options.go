@@ -125,13 +125,14 @@ type LoadProgressCallback func(ctx context.Context, event LoadProgressEvent)
 
 // loadConfig holds the configuration for load behavior.
 type loadConfig struct {
-	showProgress     bool
-	progressStepSize int
-	showStats        bool
-	srcParallelism   int
-	docParallelism   int
-	recreate         bool
-	progressCallback LoadProgressCallback
+	showProgress       bool
+	progressStepSize   int
+	showStats          bool
+	srcParallelism     int
+	docParallelism     int
+	embeddingBatchSize int
+	recreate           bool
+	progressCallback   LoadProgressCallback
 }
 
 // LoadOption represents a functional option for configuring load behavior.
@@ -175,6 +176,15 @@ func WithSourceConcurrency(n int) LoadOption {
 func WithDocConcurrency(n int) LoadOption {
 	return func(lc *loadConfig) {
 		lc.docParallelism = n
+	}
+}
+
+// WithEmbeddingBatchSize groups document embedding requests when the configured
+// embedder implements BatchEmbedder. Values <= 1 preserve per-document
+// requests. Batching currently applies when source sync is disabled.
+func WithEmbeddingBatchSize(n int) LoadOption {
+	return func(lc *loadConfig) {
+		lc.embeddingBatchSize = n
 	}
 }
 

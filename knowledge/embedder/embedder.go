@@ -64,3 +64,22 @@ type Embedder interface {
 	// Returns 0 if dimensions are not known or configurable.
 	GetDimensions() int
 }
+
+// BatchEmbedder is an optional extension implemented by embedders that can
+// encode multiple texts in one remote request. Callers should preserve the
+// input order: embeddings[i] must correspond to texts[i].
+//
+// Implementations must return an error when the response count or ordering
+// cannot be validated. This prevents callers from silently attaching a vector
+// to the wrong document.
+type BatchEmbedder interface {
+	// GetEmbeddings generates one embedding per input text.
+	GetEmbeddings(ctx context.Context, texts []string) ([][]float64, error)
+
+	// GetEmbeddingsWithUsage generates one embedding per input text and returns
+	// aggregate usage information for the request when available.
+	GetEmbeddingsWithUsage(
+		ctx context.Context,
+		texts []string,
+	) ([][]float64, map[string]any, error)
+}

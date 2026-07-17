@@ -25,6 +25,7 @@ import (
 // TestEmbedderInterface verifies that our Embedder implements the interface.
 func TestEmbedderInterface(t *testing.T) {
 	var _ embedder.Embedder = (*Embedder)(nil)
+	var _ embedder.BatchEmbedder = (*Embedder)(nil)
 }
 
 // TestNewEmbedder tests the constructor with various options.
@@ -355,6 +356,64 @@ func TestEmbedder_GetEmbedding(t *testing.T) {
 	)
 	if _, err := emb3.GetEmbedding(context.Background(), "test"); err != nil {
 		t.Fatalf("ada embedding failed: %v", err)
+	}
+}
+
+func TestEmbedder_GetEmbeddingsPreservesInputOrder(t *testing.T) {
+	var capturedInput []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			Input []string `json:"input"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		capturedInput = body.Input
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"object": "list",
+			"data": []map[string]any{
+				{"object": "embedding", "index": 1, "embedding": []float64{2}},
+				{"object": "embedding", "index": 0, "embedding": []float64{1}},
+			},
+			"model": "bge-m3",
+			"usage": map[string]any{"prompt_tokens": 2, "total_tokens": 2},
+		})
+	}))
+	defer srv.Close()
+
+	emb := New(
+		WithBaseURL(srv.URL),
+		WithAPIKey("dummy"),
+		WithModel("bge-m3"),
+		WithDimensions(1),
+	)
+	vectors, usage, err := emb.GetEmbeddingsWithUsage(
+		context.Background(),
+		[]string{"first", "second"},
+	)
+	if err != nil {
+		t.Fatalf("GetEmbeddingsWithUsage() error = %v", err)
+	}
+	if len(capturedInput) != 2 || capturedInput[0] != "first" || capturedInput[1] != "second" {
+		t.Fatalf("captured input = %#v", capturedInput)
+	}
+	if len(vectors) != 2 || vectors[0][0] != 1 || vectors[1][0] != 2 {
+		t.Fatalf("vectors = %#v", vectors)
+	}
+	if usage["total_tokens"] != int64(2) {
+		t.Fatalf("usage = %#v", usage)
+	}
+}
+
+func TestEmbedder_GetEmbeddingsRejectsInvalidBatch(t *testing.T) {
+	emb := New(WithMaxRetries(0))
+	if _, err := emb.GetEmbeddings(context.Background(), nil); err == nil {
+		t.Fatal("GetEmbeddings(nil) error = nil")
+	}
+	if _, err := emb.GetEmbeddings(context.Background(), []string{"ok", ""}); err == nil {
+		t.Fatal("GetEmbeddings() accepted empty item")
 	}
 }
 

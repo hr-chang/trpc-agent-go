@@ -28,6 +28,7 @@ import (
 
 // Verify that Embedder implements the embedder.Embedder interface.
 var _ embedder.Embedder = (*Embedder)(nil)
+var _ embedder.BatchEmbedder = (*Embedder)(nil)
 
 const (
 	// DefaultModel is the default OpenAI embedding model.
@@ -263,6 +264,42 @@ func (e *Embedder) GetEmbeddingWithUsage(ctx context.Context, text string) ([]fl
 	return embedding, usage, nil
 }
 
+// GetEmbeddings implements embedder.BatchEmbedder. It sends all texts in one
+// OpenAI-compatible embeddings request and returns vectors in input order.
+func (e *Embedder) GetEmbeddings(ctx context.Context, texts []string) ([][]float64, error) {
+	response, err := e.batchResponseWithRetry(ctx, texts)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create embeddings: %w", err)
+	}
+	embeddings, err := embeddingsFromResponse(response, len(texts))
+	if err != nil {
+		return nil, fmt.Errorf("failed to create embeddings: %w", err)
+	}
+	return embeddings, nil
+}
+
+// GetEmbeddingsWithUsage implements embedder.BatchEmbedder and reports
+// aggregate usage for the complete batch request.
+func (e *Embedder) GetEmbeddingsWithUsage(
+	ctx context.Context,
+	texts []string,
+) ([][]float64, map[string]any, error) {
+	response, err := e.batchResponseWithRetry(ctx, texts)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to create embeddings: %w", err)
+	}
+	embeddings, err := embeddingsFromResponse(response, len(texts))
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to create embeddings: %w", err)
+	}
+	usage := make(map[string]any)
+	if response.Usage.PromptTokens > 0 || response.Usage.TotalTokens > 0 {
+		usage["prompt_tokens"] = response.Usage.PromptTokens
+		usage["total_tokens"] = response.Usage.TotalTokens
+	}
+	return embeddings, usage, nil
+}
+
 // responseWithRetry wraps response with retry logic for errors.
 func (e *Embedder) responseWithRetry(ctx context.Context, text string) (*openai.CreateEmbeddingResponse, error) {
 	var lastErr error
@@ -304,6 +341,55 @@ func (e *Embedder) responseWithRetry(ctx context.Context, text string) (*openai.
 	return nil, lastErr
 }
 
+func (e *Embedder) batchResponseWithRetry(
+	ctx context.Context,
+	texts []string,
+) (*openai.CreateEmbeddingResponse, error) {
+	var lastErr error
+	for attempt := 0; attempt <= e.maxRetries; attempt++ {
+		rsp, err := e.batchResponse(ctx, texts)
+		if err == nil {
+			if _, validateErr := embeddingsFromResponse(rsp, len(texts)); validateErr == nil {
+				return rsp, nil
+			} else {
+				err = validateErr
+			}
+		}
+		lastErr = err
+		if attempt >= e.maxRetries {
+			break
+		}
+		backoff := e.getBackoffDuration(attempt)
+		if backoff > 0 {
+			log.InfoContext(ctx, fmt.Sprintf(
+				"embedding batch request failed, retrying in %v (attempt %d/%d): %v",
+				backoff, attempt+1, e.maxRetries, err,
+			))
+			select {
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			case <-time.After(backoff):
+			}
+		} else {
+			log.InfoContext(ctx, fmt.Sprintf(
+				"embedding batch request failed, retrying immediately (attempt %d/%d): %v",
+				attempt+1, e.maxRetries, err,
+			))
+		}
+	}
+	if lastErr != nil {
+		log.ErrorfContext(
+			ctx,
+			"embedding batch request failed after %d attempt(s): %v; inputs=%d input_len=%d",
+			e.maxRetries+1,
+			lastErr,
+			len(texts),
+			totalRuneCount(texts),
+		)
+	}
+	return nil, lastErr
+}
+
 func embeddingFromResponse(response *openai.CreateEmbeddingResponse) ([]float64, error) {
 	if response == nil {
 		return nil, errors.New("received nil embedding response from OpenAI API")
@@ -316,6 +402,44 @@ func embeddingFromResponse(response *openai.CreateEmbeddingResponse) ([]float64,
 		return nil, errors.New("received empty embedding vector from OpenAI API")
 	}
 	return embedding, nil
+}
+
+func embeddingsFromResponse(
+	response *openai.CreateEmbeddingResponse,
+	expected int,
+) ([][]float64, error) {
+	if response == nil {
+		return nil, errors.New("received nil embedding response from OpenAI API")
+	}
+	if expected <= 0 {
+		return nil, errors.New("embedding input cannot be empty")
+	}
+	if len(response.Data) != expected {
+		return nil, fmt.Errorf("embedding response count mismatch: expected %d, got %d", expected, len(response.Data))
+	}
+	embeddings := make([][]float64, expected)
+	for _, item := range response.Data {
+		index := int(item.Index)
+		if index < 0 || index >= expected {
+			return nil, fmt.Errorf("embedding response index out of range: %d", item.Index)
+		}
+		if embeddings[index] != nil {
+			return nil, fmt.Errorf("embedding response contains duplicate index: %d", item.Index)
+		}
+		if len(item.Embedding) == 0 {
+			return nil, fmt.Errorf("received empty embedding vector at index %d", item.Index)
+		}
+		embeddings[index] = item.Embedding
+	}
+	return embeddings, nil
+}
+
+func totalRuneCount(texts []string) int {
+	total := 0
+	for _, text := range texts {
+		total += len([]rune(text))
+	}
+	return total
 }
 
 // getBackoffDuration returns the backoff duration for the given attempt.
@@ -375,6 +499,51 @@ func (e *Embedder) response(ctx context.Context, text string) (rsp *openai.Creat
 	copy(requestOpts, e.requestOptions)
 
 	// Call OpenAI embeddings API.
+	return e.client.Embeddings.New(ctx, request, requestOpts...)
+}
+
+func (e *Embedder) batchResponse(
+	ctx context.Context,
+	texts []string,
+) (rsp *openai.CreateEmbeddingResponse, err error) {
+	if len(texts) == 0 {
+		return nil, fmt.Errorf("texts cannot be empty")
+	}
+	for i, text := range texts {
+		if text == "" {
+			return nil, fmt.Errorf("text at index %d cannot be empty", i)
+		}
+	}
+	ctx, span := trace.Tracer.Start(ctx, fmt.Sprintf("%s %s", itelemetry.OperationEmbeddings, e.model))
+	embeddingAttributes := &itelemetry.EmbeddingAttributes{
+		RequestEncodingFormat: &e.encodingFormat,
+		RequestModel:          e.model,
+		Dimensions:            e.dimensions,
+	}
+	defer func() {
+		embeddingAttributes.Error = err
+		if rsp != nil {
+			embeddingAttributes.InputToken = &rsp.Usage.PromptTokens
+		}
+		itelemetry.TraceEmbedding(span, embeddingAttributes)
+		span.End()
+	}()
+
+	request := openai.EmbeddingNewParams{
+		Input: openai.EmbeddingNewParamsInputUnion{
+			OfArrayOfStrings: append([]string(nil), texts...),
+		},
+		Model:          e.model,
+		EncodingFormat: openai.EmbeddingNewParamsEncodingFormat(e.encodingFormat),
+	}
+	if e.user != "" {
+		request.User = openai.String(e.user)
+	}
+	if e.dimensionsSet || isTextEmbedding3Model(e.model) {
+		request.Dimensions = openai.Int(int64(e.dimensions))
+	}
+	requestOpts := make([]option.RequestOption, len(e.requestOptions))
+	copy(requestOpts, e.requestOptions)
 	return e.client.Embeddings.New(ctx, request, requestOpts...)
 }
 

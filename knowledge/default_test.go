@@ -12,6 +12,8 @@ package knowledge
 import (
 	"context"
 	"fmt"
+	"slices"
+	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -225,6 +227,51 @@ func (stubEmbedder) GetEmbeddingWithUsage(ctx context.Context, text string) ([]f
 	return []float64{1, 2, 3}, nil, nil
 }
 func (stubEmbedder) GetDimensions() int { return 3 }
+
+type recordingBatchEmbedder struct {
+	mu          sync.Mutex
+	batchSizes  []int
+	singleCalls int
+}
+
+func (e *recordingBatchEmbedder) GetEmbedding(context.Context, string) ([]float64, error) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.singleCalls++
+	return []float64{1, 2, 3}, nil
+}
+
+func (e *recordingBatchEmbedder) GetEmbeddingWithUsage(
+	ctx context.Context,
+	text string,
+) ([]float64, map[string]any, error) {
+	value, err := e.GetEmbedding(ctx, text)
+	return value, nil, err
+}
+
+func (*recordingBatchEmbedder) GetDimensions() int { return 3 }
+
+func (e *recordingBatchEmbedder) GetEmbeddings(
+	_ context.Context,
+	texts []string,
+) ([][]float64, error) {
+	e.mu.Lock()
+	e.batchSizes = append(e.batchSizes, len(texts))
+	e.mu.Unlock()
+	result := make([][]float64, len(texts))
+	for i := range result {
+		result[i] = []float64{1, 2, 3}
+	}
+	return result, nil
+}
+
+func (e *recordingBatchEmbedder) GetEmbeddingsWithUsage(
+	ctx context.Context,
+	texts []string,
+) ([][]float64, map[string]any, error) {
+	values, err := e.GetEmbeddings(ctx, texts)
+	return values, nil, err
+}
 
 // stubVectorStore stores whether Add was invoked.
 
@@ -467,6 +514,35 @@ func TestLoadOptions(t *testing.T) {
 				t.Errorf("Unexpected error: %v", err)
 			}
 		})
+	}
+}
+
+func TestLoadUsesBatchEmbedding(t *testing.T) {
+	batchEmbedder := &recordingBatchEmbedder{}
+	kb := New(
+		WithSources([]source.Source{&mockSource{name: "test", docCount: 5}}),
+		WithVectorStore(&stubVectorStore{}),
+		WithEmbedder(batchEmbedder),
+	)
+	err := kb.Load(
+		context.Background(),
+		WithSourceConcurrency(1),
+		WithDocConcurrency(2),
+		WithEmbeddingBatchSize(2),
+		WithShowProgress(false),
+		WithShowStats(false),
+	)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	batchEmbedder.mu.Lock()
+	defer batchEmbedder.mu.Unlock()
+	sort.Ints(batchEmbedder.batchSizes)
+	if !slices.Equal(batchEmbedder.batchSizes, []int{1, 2, 2}) {
+		t.Fatalf("batch sizes = %v", batchEmbedder.batchSizes)
+	}
+	if batchEmbedder.singleCalls != 0 {
+		t.Fatalf("single calls = %d", batchEmbedder.singleCalls)
 	}
 }
 

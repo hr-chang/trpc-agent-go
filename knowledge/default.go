@@ -335,7 +335,7 @@ func (dk *BuiltinKnowledge) loadSourceInternal(ctx context.Context, sources []so
 		dk.processingDocIDs = sync.Map{}
 	}()
 
-	if config.srcParallelism > 1 || config.docParallelism > 1 {
+	if config.srcParallelism > 1 || config.docParallelism > 1 || config.embeddingBatchSize > 1 {
 		_, err := dk.loadConcurrent(ctx, config, sources)
 		return err
 	}
@@ -609,7 +609,15 @@ func (dk *BuiltinKnowledge) loadConcurrent(
 				return
 			}
 			log.InfofContext(ctx, "Fetched %d document(s) from source %s", len(docs), sourceName)
-			processed, err := dk.processDocuments(ctx, docs, docPool, source, &globalProcessed, reporter)
+			processed, err := dk.processDocuments(
+				ctx,
+				docs,
+				docPool,
+				source,
+				config,
+				&globalProcessed,
+				reporter,
+			)
 			if err != nil {
 				reporter.Error(ctx, LoadProgressEvent{
 					SourceName:      sourceName,
@@ -657,6 +665,7 @@ func (dk *BuiltinKnowledge) processDocuments(
 	docs []*document.Document,
 	pool *ants.Pool,
 	src source.Source,
+	config *loadConfig,
 	globalProcessed *atomic.Int64,
 	reporter *loadReporter,
 ) (int, error) {
@@ -665,24 +674,38 @@ func (dk *BuiltinKnowledge) processDocuments(
 	var completedCount atomic.Int64
 	startTime := time.Now()
 
-	processDoc := func(doc *document.Document, docIndex int) func() {
+	batchSize := 1
+	_, supportsBatch := dk.embedder.(embedder.BatchEmbedder)
+	if supportsBatch && !dk.enableSourceSync && config.embeddingBatchSize > 1 {
+		batchSize = config.embeddingBatchSize
+	}
+
+	processBatch := func(batch []*document.Document) func() {
 		return func() {
 			defer wgDoc.Done()
-			if err := dk.addDocumentWithSync(ctx, doc, src); err != nil {
+			var err error
+			if batchSize > 1 {
+				err = dk.addDocumentBatch(ctx, batch)
+			} else {
+				err = dk.addDocumentWithSync(ctx, batch[0], src)
+			}
+			if err != nil {
 				reporter.Error(ctx, LoadProgressEvent{
 					SourceName:      src.Name(),
 					SourceProcessed: int(completedCount.Load()),
 					SourceTotal:     len(docs),
 					SourceElapsed:   time.Since(startTime),
 				}, err)
-				errCh <- fmt.Errorf("add document: %w", err)
+				errCh <- fmt.Errorf("add document batch: %w", err)
 				return
 			}
 
-			completed := int(completedCount.Add(1))
+			completed := int(completedCount.Add(int64(len(batch))))
 			total := len(docs)
-			globalProcessed.Add(1)
-			reporter.RecordStat(len(doc.Content))
+			globalProcessed.Add(int64(len(batch)))
+			for _, doc := range batch {
+				reporter.RecordStat(len(doc.Content))
+			}
 
 			elapsed := time.Since(startTime)
 			var eta time.Duration
@@ -699,9 +722,11 @@ func (dk *BuiltinKnowledge) processDocuments(
 		}
 	}
 
-	for i, doc := range docs {
+	for start := 0; start < len(docs); start += batchSize {
+		end := min(start+batchSize, len(docs))
+		batch := docs[start:end]
 		wgDoc.Add(1)
-		task := processDoc(doc, i)
+		task := processBatch(batch)
 		if pool != nil {
 			if err := pool.Submit(task); err != nil {
 				wgDoc.Done()
@@ -723,6 +748,43 @@ func (dk *BuiltinKnowledge) processDocuments(
 		}
 	}
 	return processed, nil
+}
+
+func (dk *BuiltinKnowledge) addDocumentBatch(
+	ctx context.Context,
+	docs []*document.Document,
+) error {
+	batchEmbedder, ok := dk.embedder.(embedder.BatchEmbedder)
+	if !ok {
+		return fmt.Errorf("embedder does not support batch embedding")
+	}
+	texts := make([]string, len(docs))
+	for i, doc := range docs {
+		if doc == nil {
+			return fmt.Errorf("document at index %d is nil", i)
+		}
+		texts[i] = buildEmbeddingText(doc)
+	}
+	embeddings, err := batchEmbedder.GetEmbeddings(ctx, texts)
+	if err != nil {
+		return fmt.Errorf("failed to generate embedding batch: %w", err)
+	}
+	if len(embeddings) != len(docs) {
+		return fmt.Errorf(
+			"embedding batch count mismatch: expected %d, got %d",
+			len(docs),
+			len(embeddings),
+		)
+	}
+	for i, doc := range docs {
+		if len(embeddings[i]) == 0 {
+			return fmt.Errorf("received empty embedding at index %d", i)
+		}
+		if err := dk.vectorStore.Add(ctx, doc, embeddings[i]); err != nil {
+			return fmt.Errorf("failed to store embedding at index %d: %w", i, err)
+		}
+	}
+	return nil
 }
 
 // buildLoadConfig creates a load configuration with defaults and applies the given options.
