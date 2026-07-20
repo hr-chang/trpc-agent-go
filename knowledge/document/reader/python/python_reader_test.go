@@ -286,6 +286,7 @@ func TestReadFromDirectoryConfiguredFallbackAndStableEmbedding(t *testing.T) {
 			"pkg/test_service.py": "def test_run():\n    assert True\n",
 			"pkg/broken.py":       "def broken(:\n",
 			"pkg/constants.py":    "# constants only\n",
+			"pkg/empty.py":        "",
 			".ci/check.py":        "def check():\n    return True\n",
 		}
 		for name, content := range files {
@@ -356,6 +357,9 @@ func TestReadFromDirectoryConfiguredFallbackAndStableEmbedding(t *testing.T) {
 		}
 		if fallbacks["pkg/constants.py"] != "no_nodes" {
 			t.Errorf("constants.py fallback = %q, want no_nodes", fallbacks["pkg/constants.py"])
+		}
+		if files["pkg/empty.py"] {
+			t.Errorf("empty.py was indexed, want empty files skipped")
 		}
 		slices.Sort(summary)
 		return summary

@@ -218,6 +218,9 @@ func (r *Reader) ReadFromDirectory(dirPath string) ([]*document.Document, error)
 		if !strings.HasSuffix(path, ".py") || (!r.config.IncludeTestFiles && isTestFile(info.Name())) {
 			return nil
 		}
+		if info.Size() == 0 {
+			return nil
+		}
 
 		relPath, _ := filepath.Rel(absDir, path)
 		modulePath := fileToModulePath(relPath, baseModule)
