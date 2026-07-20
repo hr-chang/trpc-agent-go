@@ -11,6 +11,7 @@
 package repo
 
 import (
+	"trpc.group/trpc-go/trpc-agent-go/knowledge/document/reader"
 	"trpc.group/trpc-go/trpc-agent-go/knowledge/transform"
 )
 
@@ -62,6 +63,20 @@ func WithMetadataValue(key string, value any) Option {
 func WithFileExtensions(extensions []string) Option {
 	return func(s *Source) {
 		s.fileExtensions = append([]string(nil), extensions...)
+	}
+}
+
+// WithReader overrides the reader used for a repository file type.
+//
+// The file type is the registry name returned by source file classification,
+// such as "python", "go", or "text". The override is scoped to this Source and
+// does not mutate the process-wide reader registry.
+func WithReader(fileType string, r reader.Reader) Option {
+	return func(s *Source) {
+		if s.readerOverrides == nil {
+			s.readerOverrides = make(map[string]reader.Reader)
+		}
+		s.readerOverrides[fileType] = r
 	}
 }
 

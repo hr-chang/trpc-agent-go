@@ -16,8 +16,9 @@ import (
 
 // FixedSizeChunking implements a chunking strategy that splits text into fixed-size chunks.
 type FixedSizeChunking struct {
-	chunkSize int
-	overlap   int
+	chunkSize          int
+	overlap            int
+	preserveWhitespace bool
 }
 
 // Option represents a functional option for configuring FixedSizeChunking.
@@ -34,6 +35,16 @@ func WithChunkSize(size int) Option {
 func WithOverlap(overlap int) Option {
 	return func(fsc *FixedSizeChunking) {
 		fsc.overlap = overlap
+	}
+}
+
+// WithPreserveWhitespace controls whether chunks retain source whitespace.
+//
+// This is useful for indentation-sensitive source code. The default remains
+// false for compatibility with the existing text normalization behavior.
+func WithPreserveWhitespace(enabled bool) Option {
+	return func(fsc *FixedSizeChunking) {
+		fsc.preserveWhitespace = enabled
 	}
 }
 
@@ -65,6 +76,9 @@ func (f *FixedSizeChunking) Chunk(doc *document.Document) ([]*document.Document,
 	}
 
 	content := cleanText(doc.Content)
+	if f.preserveWhitespace {
+		content = preserveTextWhitespace(doc.Content)
+	}
 	contentLength := encoding.RuneCount(content)
 
 	// If content is smaller than chunk size, return as single chunk.

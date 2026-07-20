@@ -35,6 +35,26 @@ var (
 // cleanText normalizes whitespace in text content while ensuring UTF-8 safety.
 // It automatically detects encoding and converts to UTF-8 if necessary.
 func cleanText(content string) string {
+	processed := processTextEncoding(content)
+
+	// Trim leading and trailing whitespace.
+	processed = strings.TrimSpace(processed)
+
+	// Remove excessive whitespace while preserving line breaks.
+	lines := strings.Split(processed, "\n")
+	for i, line := range lines {
+		lines[i] = strings.TrimSpace(line)
+	}
+	return strings.Join(lines, "\n")
+}
+
+// preserveTextWhitespace converts text to UTF-8 and normalizes line endings
+// without changing indentation or leading/trailing whitespace.
+func preserveTextWhitespace(content string) string {
+	return processTextEncoding(content)
+}
+
+func processTextEncoding(content string) string {
 	// Intelligently process text based on detected encoding
 	processed, encodingInfo := encoding.SmartProcessText(content)
 
@@ -44,19 +64,10 @@ func cleanText(content string) string {
 			encodingInfo.Encoding, encodingInfo.Confidence, encodingInfo.IsValid)
 	}
 
-	// Trim leading and trailing whitespace.
-	processed = strings.TrimSpace(processed)
-
 	// Normalize line breaks.
 	processed = strings.ReplaceAll(processed, "\r\n", "\n")
 	processed = strings.ReplaceAll(processed, "\r", "\n")
-
-	// Remove excessive whitespace while preserving line breaks.
-	lines := strings.Split(processed, "\n")
-	for i, line := range lines {
-		lines[i] = strings.TrimSpace(line)
-	}
-	return strings.Join(lines, "\n")
+	return processed
 }
 
 // createChunk creates a new document chunk with appropriate metadata.

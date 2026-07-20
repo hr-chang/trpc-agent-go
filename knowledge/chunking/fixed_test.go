@@ -105,3 +105,18 @@ func TestFixedSizeChunking_SplitOverlap(t *testing.T) {
 		require.Equal(t, suffix, prefix, "chunks do not overlap as expected")
 	}
 }
+
+func TestFixedSizeChunking_PreserveWhitespace(t *testing.T) {
+	content := "def run():\r\n    if ready:\r\n        return 1\r\n"
+	doc := &document.Document{ID: "python", Content: content}
+
+	defaultChunks, err := NewFixedSizeChunking().Chunk(doc)
+	require.NoError(t, err)
+	require.Equal(t, "def run():\nif ready:\nreturn 1", defaultChunks[0].Content)
+
+	preservedChunks, err := NewFixedSizeChunking(
+		WithPreserveWhitespace(true),
+	).Chunk(doc)
+	require.NoError(t, err)
+	require.Equal(t, "def run():\n    if ready:\n        return 1\n", preservedChunks[0].Content)
+}

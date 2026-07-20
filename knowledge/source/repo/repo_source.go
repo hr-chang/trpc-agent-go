@@ -36,6 +36,7 @@ type Source struct {
 	name             string
 	metadata         map[string]any
 	readers          map[string]reader.Reader
+	readerOverrides  map[string]reader.Reader
 	fileExtensions   []string
 	recursive        bool
 	transformers     []transform.Transformer
@@ -71,6 +72,9 @@ func New(opts ...Option) *Source {
 		opt(s)
 	}
 	s.initializeReaders()
+	for fileType, r := range s.readerOverrides {
+		s.readers[fileType] = r
+	}
 	return s
 }
 

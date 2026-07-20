@@ -511,6 +511,15 @@ func TestWithFileExtensionsCopiesCallerSlice(t *testing.T) {
 	assertEqual(t, src.fileExtensions[1], ".proto")
 }
 
+func TestWithReaderOverridesRegistryReaderForSource(t *testing.T) {
+	override := &testProtoReader{}
+	src := New(WithReader("python", override))
+
+	if got := src.readers["python"]; got != override {
+		t.Fatalf("python reader = %T, want scoped override %T", got, override)
+	}
+}
+
 func TestOptionSettersBasicCoverage(t *testing.T) {
 	src := New(WithName("repo-src"),
 		WithMetadata(map[string]any{"k": "v"}),

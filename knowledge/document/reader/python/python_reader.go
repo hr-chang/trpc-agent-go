@@ -11,6 +11,7 @@
 package python
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -44,18 +45,60 @@ type Reader struct {
 	chunk        bool
 	transformers []transform.Transformer
 	parser       *codepython.Parser
+	config       Config
+}
+
+// EmbeddingTextMode controls the text embedded for Python AST documents.
+type EmbeddingTextMode string
+
+const (
+	// EmbeddingTextModeLegacy preserves the existing metadata-only AST payload.
+	EmbeddingTextModeLegacy EmbeddingTextMode = "legacy"
+	// EmbeddingTextModeCode embeds the AST node's source code.
+	EmbeddingTextModeCode EmbeddingTextMode = "code"
+	// EmbeddingTextModeStructuredCode embeds stable AST fields and source code.
+	EmbeddingTextModeStructuredCode EmbeddingTextMode = "structured_code"
+)
+
+// Config controls optional Python reader behavior. Zero values preserve the
+// historical reader behavior.
+type Config struct {
+	// IncludeTestFiles includes test_*.py and *_test.py files.
+	IncludeTestFiles bool
+	// IncludeHiddenDirs includes Python files under hidden directories except
+	// known generated/environment directories such as .git and .venv.
+	IncludeHiddenDirs bool
+	// StableRootModule replaces the checkout directory name in module paths.
+	StableRootModule string
+	// StableFilePaths reports repository-relative paths instead of checkout
+	// absolute paths.
+	StableFilePaths bool
+	// FallbackToFile emits a whole-file document when parsing fails or yields
+	// no AST nodes.
+	FallbackToFile bool
+	// EmbeddingTextMode selects the representation sent to the embedder.
+	EmbeddingTextMode EmbeddingTextMode
 }
 
 // New creates a new Python reader with the given options.
 func New(opts ...reader.Option) reader.Reader {
+	return NewWithConfig(Config{}, opts...)
+}
+
+// NewWithConfig creates a Python reader with AST-specific configuration.
+func NewWithConfig(pythonConfig Config, opts ...reader.Option) reader.Reader {
 	config := &reader.Config{Chunk: true}
 	for _, opt := range opts {
 		opt(config)
+	}
+	if pythonConfig.EmbeddingTextMode == "" {
+		pythonConfig.EmbeddingTextMode = EmbeddingTextModeLegacy
 	}
 	return &Reader{
 		chunk:        config.Chunk,
 		transformers: config.Transformers,
 		parser:       codepython.NewParser(),
+		config:       pythonConfig,
 	}
 }
 
@@ -150,6 +193,9 @@ func (r *Reader) ReadFromDirectory(dirPath string) ([]*document.Document, error)
 	}
 
 	baseModule := filepath.Base(absDir)
+	if r.config.StableRootModule != "" {
+		baseModule = normalizeModuleName(r.config.StableRootModule)
+	}
 	baseMetadata := map[string]any{
 		source.MetaSource:     source.TypeDir,
 		source.MetaSourceName: r.Name(),
@@ -158,17 +204,18 @@ func (r *Reader) ReadFromDirectory(dirPath string) ([]*document.Document, error)
 	var allDocs []*document.Document
 	var parseErrors []error
 	parsedFiles := 0
+	fallbackFiles := 0
 	err = filepath.Walk(absDir, func(path string, info os.FileInfo, walkErr error) error {
 		if walkErr != nil {
 			return walkErr
 		}
 		if info.IsDir() {
-			if shouldSkipDir(info.Name()) {
+			if shouldSkipDir(info.Name(), r.config.IncludeHiddenDirs) {
 				return filepath.SkipDir
 			}
 			return nil
 		}
-		if !strings.HasSuffix(path, ".py") || isTestFile(info.Name()) {
+		if !strings.HasSuffix(path, ".py") || (!r.config.IncludeTestFiles && isTestFile(info.Name())) {
 			return nil
 		}
 
@@ -178,13 +225,32 @@ func (r *Reader) ReadFromDirectory(dirPath string) ([]*document.Document, error)
 		result, parseErr := r.parser.ParseFileAt(path, modulePath)
 		if parseErr != nil {
 			parseErrors = append(parseErrors, fmt.Errorf("%s: %w", relPath, parseErr))
+			if r.config.FallbackToFile {
+				doc, fallbackErr := r.createDirectoryFallback(path, relPath, baseMetadata, "parse_error")
+				if fallbackErr != nil {
+					parseErrors = append(parseErrors, fmt.Errorf("%s fallback: %w", relPath, fallbackErr))
+					return nil
+				}
+				allDocs = append(allDocs, doc)
+				fallbackFiles++
+			}
 			return nil
 		}
 		parsedFiles++
 		if result == nil || len(result.Nodes) == 0 {
+			if r.config.FallbackToFile {
+				doc, fallbackErr := r.createDirectoryFallback(path, relPath, baseMetadata, "no_nodes")
+				if fallbackErr != nil {
+					parseErrors = append(parseErrors, fmt.Errorf("%s fallback: %w", relPath, fallbackErr))
+					return nil
+				}
+				allDocs = append(allDocs, doc)
+				fallbackFiles++
+			}
 			return nil
 		}
 
+		r.stabilizeDirectoryResult(result, relPath)
 		docs := r.nodesToDocuments(result, baseMetadata)
 		allDocs = append(allDocs, docs...)
 		return nil
@@ -194,7 +260,7 @@ func (r *Reader) ReadFromDirectory(dirPath string) ([]*document.Document, error)
 	}
 
 	if len(parseErrors) > 0 {
-		if parsedFiles == 0 {
+		if parsedFiles == 0 && fallbackFiles == 0 {
 			return nil, fmt.Errorf("python reader: all %d file(s) failed to parse in %s: %w",
 				len(parseErrors), dirPath, errors.Join(parseErrors...))
 		}
@@ -202,6 +268,7 @@ func (r *Reader) ReadFromDirectory(dirPath string) ([]*document.Document, error)
 			"dir", dirPath,
 			"failed_files", len(parseErrors),
 			"parsed_files", parsedFiles,
+			"fallback_files", fallbackFiles,
 			"error", errors.Join(parseErrors...))
 	}
 
@@ -239,6 +306,15 @@ func (r *Reader) processContent(content, name string, baseMetadata map[string]an
 }
 
 func (r *Reader) nodesToDocuments(result *codeast.Result, baseMetadata map[string]any) []*document.Document {
+	var buildEmbeddingText func(*codeast.Node) string
+	switch r.config.EmbeddingTextMode {
+	case EmbeddingTextModeCode:
+		buildEmbeddingText = nil
+	case EmbeddingTextModeStructuredCode:
+		buildEmbeddingText = buildStructuredCodeEmbeddingText
+	default:
+		buildEmbeddingText = codepython.BuildNodeEmbeddingText
+	}
 	payloads := codeast.NodesToDocumentPayloads(result, codeast.NodeDocumentPayloadOptions{
 		BaseMetadata:  baseMetadata,
 		ScopeBasePath: repoRootFromMetadata(baseMetadata),
@@ -246,7 +322,7 @@ func (r *Reader) nodesToDocuments(result *codeast.Result, baseMetadata map[strin
 		FormatType: func(entityType codeast.EntityType) string {
 			return string(entityType)
 		},
-		BuildEmbeddingText: codepython.BuildNodeEmbeddingText,
+		BuildEmbeddingText: buildEmbeddingText,
 	})
 	docs := make([]*document.Document, 0, len(payloads))
 	for _, payload := range payloads {
@@ -291,7 +367,109 @@ func (r *Reader) createFileDocumentFromInfo(content, name string, baseMetadata m
 	doc.Metadata[source.MetaChunkSize] = utf8.RuneCountInString(content)
 	doc.Metadata[source.MetaContentLength] = utf8.RuneCountInString(content)
 
+	if r.config.EmbeddingTextMode == EmbeddingTextModeStructuredCode {
+		doc.EmbeddingText = buildStructuredFileEmbeddingText(name, fileInfo, content)
+	}
 	return doc
+}
+
+func (r *Reader) createDirectoryFallback(
+	filePath string,
+	relPath string,
+	baseMetadata map[string]any,
+	reason string,
+) (*document.Document, error) {
+	content, err := os.ReadFile(filePath)
+	if err != nil {
+		return nil, fmt.Errorf("read fallback file: %w", err)
+	}
+	name := filePath
+	if r.config.StableFilePaths {
+		name = filepath.ToSlash(relPath)
+	}
+	doc := r.createFileDocument(string(content), name, baseMetadata)
+	doc.Metadata["trpc_ast_fallback_reason"] = reason
+	return doc, nil
+}
+
+func (r *Reader) stabilizeDirectoryResult(result *codeast.Result, relPath string) {
+	if result == nil || !r.config.StableFilePaths {
+		return
+	}
+	stablePath := filepath.ToSlash(relPath)
+	if result.File != nil {
+		result.File.Name = stablePath
+	}
+	for _, node := range result.Nodes {
+		if node != nil {
+			node.FilePath = stablePath
+		}
+	}
+}
+
+type structuredCodeEmbedding struct {
+	Type      string `json:"type"`
+	Name      string `json:"name"`
+	FullName  string `json:"full_name"`
+	Package   string `json:"package,omitempty"`
+	FilePath  string `json:"file_path"`
+	Signature string `json:"signature,omitempty"`
+	Comment   string `json:"comment,omitempty"`
+	Code      string `json:"code"`
+}
+
+func buildStructuredCodeEmbeddingText(node *codeast.Node) string {
+	if node == nil {
+		return ""
+	}
+	payload := structuredCodeEmbedding{
+		Type:      string(node.Type),
+		Name:      node.Name,
+		FullName:  node.FullName,
+		Package:   node.Package,
+		FilePath:  filepath.ToSlash(node.FilePath),
+		Signature: node.Signature,
+		Comment:   strings.TrimSpace(node.Comment),
+		Code:      node.Code,
+	}
+	encoded, _ := json.Marshal(payload)
+	return string(encoded)
+}
+
+func buildStructuredFileEmbeddingText(name string, fileInfo *codeast.FileInfo, content string) string {
+	packageName := ""
+	if fileInfo != nil {
+		packageName = fileInfo.Package
+	}
+	payload := structuredCodeEmbedding{
+		Type:     "file",
+		Name:     name,
+		FullName: name,
+		Package:  packageName,
+		FilePath: filepath.ToSlash(name),
+		Code:     content,
+	}
+	encoded, _ := json.Marshal(payload)
+	return string(encoded)
+}
+
+func normalizeModuleName(name string) string {
+	var builder strings.Builder
+	for _, r := range name {
+		switch {
+		case r >= 'a' && r <= 'z':
+			builder.WriteRune(r)
+		case r >= 'A' && r <= 'Z':
+			builder.WriteRune(r)
+		case r >= '0' && r <= '9':
+			builder.WriteRune(r)
+		case r == '_':
+			builder.WriteRune(r)
+		default:
+			builder.WriteRune('_')
+		}
+	}
+	return strings.Trim(builder.String(), "_")
 }
 
 func (r *Reader) applyTransformers(docs []*document.Document) ([]*document.Document, error) {
@@ -342,13 +520,13 @@ func extractFileNameFromURL(urlStr string) string {
 	return fileName
 }
 
-func shouldSkipDir(name string) bool {
-	if strings.HasPrefix(name, ".") {
+func shouldSkipDir(name string, includeHiddenDirs bool) bool {
+	if !includeHiddenDirs && strings.HasPrefix(name, ".") {
 		return true
 	}
 	skip := map[string]bool{
 		"__pycache__": true, "node_modules": true,
-		"venv": true, ".venv": true, "env": true,
+		"venv": true, ".venv": true, "env": true, ".tox": true,
 		"dist": true, "build": true, ".git": true,
 	}
 	return skip[strings.ToLower(name)]
