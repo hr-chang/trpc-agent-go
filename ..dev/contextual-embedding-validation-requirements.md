@@ -248,7 +248,7 @@ Judge calibration 至少检查：
 - 重复运行稳定性；
 - 对受控劣化 answer/context 的方向判别；
 - 与参考评测的逐样本相关性和聚合偏差；
-- 实际 token、费用和延迟。
+- 实际 token 用量和延迟；如有权威内部单价则附费用，但价格信息不作为阻塞门槛。
 
 校准结果只用于选择 Judge，不属于 baseline stability 或 Contextual effectiveness 证据。旧的
 GLM-5.2 Agent + GLM-5.2 Judge 结果仅作为历史运行参考，不与新 Judge 指标直接合并。
