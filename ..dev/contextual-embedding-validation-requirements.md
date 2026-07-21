@@ -211,6 +211,7 @@ answer model: GLM-5.2
 judge model: 独立低成本模型（正式运行前冻结）
 embedding model: BGE-M3
 judge max output tokens / per-job timeout: 65536 / 1800 seconds
+judge structured-output whole-prompt max attempts: 5
 prompt declared max searches: 3
 hard max tool iterations: 500
 formal A/B eligible: false
@@ -219,6 +220,11 @@ formal A/B eligible: false
 Judge 必须显式配置独立于 Agent 的 model、URL 和 API key。缺少任一显式配置、任一项
 继续回退到 Agent，或者实际 model、endpoint、credential 未分离时，该轮 evidence 状态必须
 为 `insufficient`。具体 Judge 型号在校准完成后冻结，并由 manifest 和运行 fingerprint 记录。
+Judge reasoning 参数必须保持未提供，并在 manifest 中记录
+`reasoning_parameter_supplied=false`。对于 OpenAI 兼容接口返回的纯文本 block list，允许在
+进入 RAGAS 前无损归一化为字符串；若结构化输出缺字段，则只允许重新执行完整 prompt，最多
+5 次，不得补默认字段或默认分数。重试耗尽后该指标保持缺失，该轮 evidence 状态必须为
+`insufficient`；归一化次数、结构化重试次数和恢复次数必须写入结果产物。
 
 其中，`hard max tool iterations = 500` 是 modified-harness watchdog，用于避免近似无界的
 工具循环永久挂起，不代表正式实验的科学检索预算。Prompt 声明次数、硬上限和每个样本的
