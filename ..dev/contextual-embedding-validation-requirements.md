@@ -210,6 +210,7 @@ embedding dimensions: 1024
 answer model: GLM-5.2
 judge model: 独立低成本模型（正式运行前冻结）
 embedding model: BGE-M3
+judge max output tokens / per-job timeout: 65536 / 1800 seconds
 prompt declared max searches: 3
 hard max tool iterations: 500
 formal A/B eligible: false
