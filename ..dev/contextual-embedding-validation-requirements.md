@@ -225,6 +225,11 @@ Judge reasoning 参数必须保持未提供，并在 manifest 中记录
 进入 RAGAS 前无损归一化为字符串；若结构化输出缺字段，则只允许重新执行完整 prompt，最多
 5 次，不得补默认字段或默认分数。重试耗尽后该指标保持缺失，该轮 evidence 状态必须为
 `insufficient`；归一化次数、结构化重试次数和恢复次数必须写入结果产物。
+若完整 evaluator 已产出且仅有少量 metric cell 缺失，允许从该结果执行缺失单元恢复，
+但必须校验源结果与 samples checkpoint、保持 Judge 评分身份一致、禁止覆盖任何已有有限值，
+并在新产物中记录源结果摘要、源/当前仓库版本、请求/恢复/剩余 cell 及独立恢复耗时与用量。
+timeout 与 worker 数可作为执行控制调整；模型、端点、`max_tokens`、reasoning 未提供状态及
+结构化输出策略不得变化。恢复后仍有任一缺失值时，evidence 继续为 `insufficient`。
 
 其中，`hard max tool iterations = 500` 是 modified-harness watchdog，用于避免近似无界的
 工具循环永久挂起，不代表正式实验的科学检索预算。Prompt 声明次数、硬上限和每个样本的
