@@ -1,6 +1,6 @@
 # Contextual Embedding 有效性验证需求
 
-状态：I0 已关闭；I1 实现已落地，等待服务器生成 Context、建索引并运行 A/B
+状态：I0 已关闭；I1 smoke controller 已落地，等待服务器 Context probe、建索引与 30 题 A/B
 
 日期：2026-07-20
 
@@ -404,13 +404,14 @@ RGB 当前的 passage 本身就是独立文档，缺少可供 contextualization 
 
 1. 扩展 MultiHop-RAG 数据契约并完成全部 gold evidence 映射预检；
 2. 使用同一路径生成 A/B 完全对齐的父文档和 chunks；
-3. 使用 A 组运行 MultiHop-RAG 小样本 retrieval-only smoke；
-4. 生成并冻结 B 组 context cache，运行相同 smoke；
-5. 分别全量构建 A/B 新索引；
-6. 对完整 450 题运行 retrieval-only A/B，并生成 paired bootstrap 报告；
-7. I1 不达标则停止；达标后再运行完整 450 题的 GLM-5.2 + Gemini-3-Flash 端到端 A/B；
-8. 最终只运行一次 HuggingFace 和 RGB 非回归；
-9. 使用同一份 lineage 生成检索、回答、成本和错误对比报告。
+3. 使用独立产物运行 Context 模型 probe，不写入正式 cache；
+4. probe 成功后生成并冻结完整 B 组 context cache；
+5. 分别全量构建 A/B 两个全新且隔离的索引；
+6. 在已完成的两个索引上运行三个问题类型各 10 题的同批次 retrieval-only smoke；
+7. smoke 升级门为 `promote` 时，复用同一 A/B 索引运行完整 450 题 retrieval-only A/B；
+8. I1 不达标则停止；达标后再运行完整 450 题的 GLM-5.2 + Gemini-3-Flash 端到端 A/B；
+9. 最终只运行一次 HuggingFace 和 RGB 非回归；
+10. 使用同一份 lineage 生成检索、回答、成本和错误对比报告。
 
 Smoke 失败或没有任何检索信号时，不继续扩大实验规模。
 
@@ -485,6 +486,21 @@ A / B 聚合指标
 聚合结果不能替代逐样本结果。
 
 ## 7. 有效性标准
+
+### 7.0 I1 smoke 扩量门槛
+
+Smoke 固定从 comparison、inference、temporal 三类各取 10 题，只决定是否值得扩大到完整
+450 题，不形成方法有效性结论，也不使用置信区间替代第 7.1 节正式门槛。
+
+只有以下条件全部满足时，smoke 报告的 `smoke_promotion.decision` 才能为 `promote`：
+
+1. 30/30 题 A/B 配对完成，0 个运行错误，0 个失败 request attempt；
+2. `All-evidence Recall@10` 或 `Evidence Recall@10` 至少一项绝对提升不小于 `0.01`；
+3. `Document Recall@4` 和 `Evidence Recall@4` 均不得下降超过 `0.05`；
+4. 任一问题类型的 `All-evidence Recall@10` 不得下降超过 `0.10`。
+
+运行证据不完整时结论为 `insufficient`；证据完整但没有上述方向性信号或存在明显退化时
+结论为 `stop`。`promote` 仅授权运行完整 I1，不表示该方法已通过第 7.1 节。
 
 ### 7.1 I1 方法有效性门槛
 
