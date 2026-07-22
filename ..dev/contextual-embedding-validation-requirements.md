@@ -1,6 +1,6 @@
 # Contextual Embedding 有效性验证需求
 
-状态：I0 已关闭；I1 smoke controller 已落地，等待服务器 Context probe、建索引与 30 题 A/B
+状态：I0 已关闭；I1 retrieval-only smoke 已 `promote`，等待完整 450 题正式 A/B
 
 日期：2026-07-20
 
@@ -325,6 +325,40 @@ Context cache、retrieval-only A/B、paired bootstrap 和门禁报告。Go bench
 1,209 条 gold evidence；全部 evidence 均完成 exact parent-span 到 chunk 的映射，缺失数为 0。
 该预检只证明数据与实现契约可运行，不是方法效果结果；正式结论仍需在服务器上生成完整
 Context cache、建立全新 A/B 索引并运行同批次 450 题。
+
+#### 4.3.1 I1 smoke 结果（已完成）
+
+2026-07-22 已在服务器完成正式 Context cache、独立 A/B 索引和分层 30 题 retrieval-only
+smoke：
+
+```text
+root commit:               596e4a4423cc6c4d94f823a956c3084d0a40678b
+benchmark commit:          5ae80bb59d9fa257144723c6ccf2a9e32ef27ae3
+contexts:                  13,086 / 13,086
+context errors / missing:  0 / 0
+A/B index rows:            13,086 / 13,086
+paired valid cases:        30 / 30
+runtime errors:            0
+failed request attempts:   0
+smoke promotion:           promote
+formal method conclusion:  false
+```
+
+主要方向性结果为：
+
+```text
+All-evidence Recall@10: +0.0333，95% CI [ 0.0000, 0.1000]
+All-evidence Recall@20: +0.1000，95% CI [ 0.0000, 0.2333]
+Document Recall@4:      +0.0833，95% CI [ 0.0083, 0.1639]
+Evidence Recall@10:     +0.0528，95% CI [-0.0250, 0.1250]
+MRR:                    -0.0526，95% CI [-0.1696, 0.0785]
+NDCG@20:                -0.0162，95% CI [-0.0744, 0.0451]
+```
+
+该结果满足第 7.0 节扩量条件，只授权复用同一 Context cache 和同一组 complete indexes 运行
+完整 450 题 I1。它尚未达到或评估第 7.1 节门槛，不得描述为方法有效。精简证据记录见
+`benchmark/knowledge/contextual_retrieval/results/i1-smoke-20260722.md`，原始 sealed 产物保留在
+`/data/benchmark/contextual-retrieval/runs/smoke_001/`。
 
 ### 4.4 I2 End-to-end contextual A/B lane
 
