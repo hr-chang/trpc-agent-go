@@ -1,6 +1,6 @@
 # Contextual Embedding 有效性验证需求
 
-状态：I0 已关闭；I1 retrieval-only smoke 已 `promote`，等待完整 450 题正式 A/B
+状态：I0 已关闭；I1 正式 retrieval-only A/B 已完成，门禁 `fail`，停止 I2 与框架化设计
 
 日期：2026-07-20
 
@@ -360,6 +360,50 @@ NDCG@20:                -0.0162，95% CI [-0.0744, 0.0451]
 `benchmark/knowledge/contextual_retrieval/results/i1-smoke-20260722.md`，原始 sealed 产物保留在
 `/data/benchmark/contextual-retrieval/runs/smoke_001/`。
 
+#### 4.3.2 I1 正式结果（已完成）
+
+2026-07-22 已复用上述冻结 Context cache 和同一组 complete A/B indexes，完成 450 题
+retrieval-only 正式 A/B。正式 controller 先对当前 checkout 执行新的分层 30 题 conformance
+smoke，结果仍为 `promote`，随后运行完整评测；正式阶段未调用 `/load`，也未初始化 Agent、
+RAGAS 或 Judge。
+
+```text
+formal root commit:             055c85403f98856438690aeeef0eb642dc735a30
+formal benchmark commit:        baf70d43eb6f1c0622b325a0b0fc20b7acd001ab
+expected / completed:           450 / 450
+paired valid cases:             450
+runtime errors:                 0
+failed request attempts:        0
+evidence status:                valid
+formal A/B eligible:            true
+load endpoint called:           false
+formal gate:                    fail
+```
+
+主要正式结果为：
+
+```text
+All-evidence Recall@10: -0.0022，95% CI [-0.0333,  0.0311]
+All-evidence Recall@20: +0.0289，95% CI [-0.0044,  0.0644]
+Document Recall@4:      +0.0087，95% CI [-0.0159,  0.0341]
+Evidence Recall@10:     -0.0133，95% CI [-0.0376,  0.0107]
+Evidence Recall@20:     +0.0198，95% CI [-0.0048,  0.0448]
+Evidence Recall@4:      -0.0085，95% CI [-0.0302,  0.0137]
+MRR:                    -0.0226，95% CI [-0.0525,  0.0079]
+NDCG@20:                -0.0044，95% CI [-0.0207,  0.0118]
+```
+
+正式结果同时显示问题类型效果不一致：`comparison` 和 `temporal` 的 All-evidence Recall@10
+各为 `+0.0133`，`inference` 为 `-0.0333`；其中 inference 的 Evidence Recall@10 为
+`-0.0600`，95% CI `[-0.0956, -0.0250]`，MRR 和 NDCG@20 也显著下降。Recall@20 的正向
+结果只能视为探索性信号，不能替代预先冻结的 Recall@10 门槛。
+
+因此，本轮属于证据完整的负结果，而非“证据不足”。第 7.1 节的两个主指标提升、CI 和
+分题型一致性均未通过，结论为“无效”：不运行 I2、不运行最终非回归，也不进入 TAG 框架化
+设计。完整 lineage、逐项门禁和结果摘要见
+`benchmark/knowledge/contextual_retrieval/results/i1-formal-20260722.md`；原始 sealed 产物保留在
+`/data/benchmark/contextual-retrieval/runs/formal_001/`。
+
 ### 4.4 I2 End-to-end contextual A/B lane
 
 只有 I1 达到第 7.1 节的方法有效性门槛后，才运行完整 450 题的端到端 A/B：
@@ -379,6 +423,9 @@ context cache: B 组固定并复用同一批 context
 
 Baseline reproduction lane 中的旧索引、历史样本或聚合指标不得直接复用为正式 A。正式
 A/B 的具体硬检索上限在进入该 lane 前冻结，并写入 manifest；不能只依靠 Prompt 约束。
+
+本轮 I1 已于 2026-07-22 得到有效但未通过门槛的正式结果，因此 I2 未触发。Gemini Judge
+配置继续保留为已验收的 I0 基础设施，但本方案不再调用它。
 
 ## 5. 对照实验
 
@@ -618,6 +665,9 @@ I1 或 I2 没有达到方法有效性门槛，停止框架化设计。
 ```
 
 达到有效性标准不自动意味着该方法应成为 TAG 默认能力，也不自动确定其公共 API。
+
+本轮实际结论为“无效”：I1 正式证据完整，但未达到第 7.1 节门槛。按预注册停止线，I2、
+非回归和框架化设计均不继续。
 
 ## 8. 验收标准
 
