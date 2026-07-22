@@ -1,8 +1,10 @@
 # Contextual Embedding 有效性验证需求
 
-状态：已评审（I0 evidence harness 已实现；独立 Judge 与正式运行待完成）
+状态：I0 已关闭；I1 Retrieval-only A/B 协议待评审
 
 日期：2026-07-20
+
+最近更新：2026-07-22
 
 ## 1. 验证目标
 
@@ -182,19 +184,21 @@ Benchmark 复现基础已由独立任务交付，当前任务已接管服务器�
 运行日志和有效配置
 ```
 
-历史 README 数值只用于检查复现结果的量级和趋势。新方法的正式结论必须来自同一环境、
-同一代码版本和同一批次重新运行的 A/B，不得把新的实验组直接与历史结果比较。
+历史 README 数值只用于检查复现结果的量级和趋势。README 作者已确认，历史实验实际使用
+`DeepSeek-V3.2 + Gemini-3-Flash + BGE-M3`；原 README 中的 Qwen3.5 Judge 是文档笔误。
+新方法的正式结论必须来自同一环境、同一代码版本和同一批次重新运行的 A/B，不得把新的
+实验组直接与历史结果当作严格 A/B。
 
 ### 4.1 Baseline reproduction lane
 
-Contextual Embedding 实现前，允许先建立独立的 baseline reproduction lane，用于验证：
+I0 已建立并完成独立的 baseline reproduction lane，用于验证：
 
 - 模型、Embedding、PGVector 和 RAGAS 链路可以运行；
 - 运行失败具有足够的诊断信息；
 - 重复运行的失败率和指标波动可以观察；
 - 昂贵的 Q&A 结果可以在 evaluator 失败后复用。
 
-当前 baseline reproduction lane 固定标识为：
+I0 baseline reproduction lane 的最终标识为：
 
 ```text
 run kind: baseline_reproduction
@@ -205,21 +209,41 @@ evaluator: RAGAS
 retrieval k: 4
 vector store: PGVector
 search mode: hybrid（0）
+index mode: reuse existing PGVector index
 chunk size / overlap: 500 / 50
 embedding dimensions: 1024
 answer model: GLM-5.2
-judge model: 独立低成本模型（正式运行前冻结）
+judge model: Gemini-3-Flash
 embedding model: BGE-M3
-judge max output tokens / per-job timeout: 65536 / 1800 seconds
+judge max output tokens: 65536
+judge reasoning parameter: omitted
 judge structured-output whole-prompt max attempts: 5
 prompt declared max searches: 3
 hard max tool iterations: 500
+evidence status: valid
 formal A/B eligible: false
 ```
 
+I0 最终完成 54/54 样本、0 个 Agent 错误，七项指标均为 54/54 个有限值：
+
+| 指标 | 当前 GLM-5.2 + Gemini-3-Flash | 历史 DeepSeek-V3.2 + Gemini-3-Flash | 差值 |
+|---|---:|---:|---:|
+| Faithfulness | 0.9026 | 0.9815 | -0.0789 |
+| Answer Relevancy | 0.9694 | 0.8799 | +0.0895 |
+| Answer Correctness | 0.6612 | 0.8104 | -0.1492 |
+| Answer Similarity | 0.7850 | 0.7240 | +0.0610 |
+| Context Precision | 0.6149 | 0.7098 | -0.0949 |
+| Context Recall | 0.8333 | 0.9444 | -0.1111 |
+| Context Entity Recall | 0.4964 | 0.4867 | +0.0097 |
+
+两次结果使用相同 Judge 和 Embedding，但 Agent、代码版本、索引、有效检索行为和工具预算
+仍可能不同，因此只作方向性比较。该结果完成的是 evidence harness 验收，不证明
+Contextual Embedding 有效，也不是正式 A 组。I0 至此关闭；在最终非回归阶段前不再重复运行
+HF54。
+
 Judge 必须显式配置独立于 Agent 的 model、URL 和 API key。缺少任一显式配置、任一项
 继续回退到 Agent，或者实际 model、endpoint、credential 未分离时，该轮 evidence 状态必须
-为 `insufficient`。具体 Judge 型号在校准完成后冻结，并由 manifest 和运行 fingerprint 记录。
+为 `insufficient`。Judge 固定为 Gemini-3-Flash，并由 manifest 和运行 fingerprint 记录。
 Judge reasoning 参数必须保持未提供，并在 manifest 中记录
 `reasoning_parameter_supplied=false`。对于 OpenAI 兼容接口返回的纯文本 block list，允许在
 进入 RAGAS 前无损归一化为字符串；若结构化输出缺字段，则只允许重新执行完整 prompt，最多
@@ -249,33 +273,60 @@ Agent 失败样本仍应以明确占位值保留在固定问题分母中，并�
 或 Judge 失败、任一指标缺失或运行配置不可追溯，该轮结果的证据状态必须为
 `insufficient`，但仍可作为排障产物保存。
 
-### 4.2 Judge selection gate
+### 4.2 Judge identity（已完成）
 
-正式 baseline 和 Contextual A/B 前，必须先完成独立低成本 Judge 的校准。校准只重放固定的
-Q&A samples，不重新调用 Agent，也不改变检索结果。
+历史实验和当前 I0 均使用 Gemini-3-Flash Judge；当前 I0 额外确认了 Agent 与 Judge 的 model、
+URL 和 credential 显式分离。后续 I2 继续冻结该 Judge，reasoning 参数保持未提供，只提高
+`max_tokens` 上限，不以成本作为模型选择或实验通过条件。
 
-Judge calibration 至少检查：
+如果后续替换 Judge，应将其视为新的评测配置，只重放固定 Q&A samples 进行完成率、稳定性、
+受控劣化方向和聚合偏差校准，不重新调用 Agent。不同 Judge 配置的数值不得直接合并。
 
-- 固定样本上的完成率、错误类型和指标完整性；
-- 重复运行稳定性；
-- 对受控劣化 answer/context 的方向判别；
-- 与参考评测的逐样本相关性和聚合偏差；
-- 实际 token 用量和延迟；如有权威内部单价则附费用，但价格信息不作为阻塞门槛。
+I1 是确定性的 retrieval-only 评测，不初始化 Agent、RAGAS 或 Gemini Judge；用于生成
+chunk context 的模型属于索引构建配置，不是 Judge，并且其输出必须缓存。
 
-校准结果只用于选择 Judge，不属于 baseline stability 或 Contextual effectiveness 证据。旧的
-GLM-5.2 Agent + GLM-5.2 Judge 结果仅作为历史运行参考，不与新 Judge 指标直接合并。
+### 4.3 I1 Retrieval-only contextual A/B lane
 
-### 4.3 Formal contextual A/B lane
+下一阶段先运行独立的 retrieval-only A/B：
 
-正式 Contextual Embedding 验证必须使用独立的 formal contextual A/B lane：
+```text
+run kind: retrieval_contextual_ab
+evidence scope: retrieval_effectiveness
+primary dataset: MultiHop-RAG（609 篇文章、450 道题）
+query: 原始问题，不做 rewrite
+agent / RAGAS / judge: none
+retrieval k: 4、10、20
+index: A/B 分别使用全新且隔离的索引
+loader: A/B 使用同一个实验加载路径
+embedding model: A/B 均为 BGE-M3
+retrieval configuration: A/B 完全相同
+context cache: B 组固定并复用同一批 context
+```
+
+MultiHop-RAG 的每个评测项必须保留稳定 question ID、`question_type` 和完整原始
+`evidence_list`，不能只把 `fact` 拼接到 `QAItem.context`。语料预处理还必须为每篇文章、每个
+gold evidence 和每个 chunk 建立稳定 ID，并保存 evidence 到 parent document / chunk 的映射。
+Document hit 以 `parent_document_id` 判断；Evidence hit 以预先生成并冻结的 evidence-to-chunk
+映射判断。无法映射的 evidence 必须进入数据校验报告并使正式证据为 `insufficient`，不得在
+计算分母时静默忽略。
+
+当前代码尚未满足该 lane：`QAItem` 没有 evidence metadata，MultiHop loader 只把 gold facts
+拼入 `context`，`main.py` 又固定初始化 RAGAS。I1 因此需要单独的 evidence-aware
+retrieval-only runner，而不是在现有端到端 runner 中增加旁路条件。
+
+### 4.4 I2 End-to-end contextual A/B lane
+
+只有 I1 达到第 7.1 节的方法有效性门槛后，才运行完整 450 题的端到端 A/B：
 
 ```text
 run kind: formal_contextual_ab
-evidence scope: contextual_effectiveness
+evidence scope: end_to_end_effectiveness
 primary dataset: MultiHop-RAG
 index: A/B 分别使用全新且隔离的索引
 loader: A/B 使用同一个实验加载路径
-models: A/B 使用相同 answer、独立 judge 和 embedding 模型
+answer model: A/B 均为 GLM-5.2
+judge model: A/B 均为 Gemini-3-Flash
+embedding model: A/B 均为 BGE-M3
 tool budget: A/B 使用相同且由代码硬执行的明确上限
 context cache: B 组固定并复用同一批 context
 ```
@@ -306,8 +357,8 @@ B. Contextual Embedding
 - 相同 embedding 模型和维度；
 - 相同 vector store；
 - 相同 search mode、top-k 和过滤条件；
-- 相同 Agent、query、prompt 和最大检索次数；
-- 相同 answer model 和 evaluator；
+- I1 使用相同 query 且两组都不运行 Agent 或 Judge；
+- I2 使用相同 Agent、query、prompt、最大检索次数、answer model 和 evaluator；
 - 相同错误样本处理规则；
 - 相互隔离且全新构建的索引。
 
@@ -325,9 +376,10 @@ MultiHop-RAG 是主要有效性数据集。它包含完整新闻文章和需要�
 
 #### HuggingFace Documentation
 
-HuggingFace Documentation 用于 smoke test 和普通文档非回归检查。
+HuggingFace Documentation 只用于最终一次普通文档非回归检查。
 
-该数据集规模较小，且当前结果已接近较高召回水平，不单独承担新方法有效性的结论。
+I0 已完成其基础设施验收职责。该数据集规模较小，不再用于 I1 smoke，也不单独承担新方法
+有效性的结论。
 
 #### RGB
 
@@ -338,12 +390,15 @@ RGB 当前的 passage 本身就是独立文档，缺少可供 contextualization 
 
 ### 5.3 运行顺序
 
-1. 使用 A 组跑通小规模 smoke，确认与复现结果量级一致；
-2. 使用 B 组跑通相同 smoke，检查 context、向量和检索结果；
-3. 固定并缓存 B 组全部 contexts；
-4. 在完整 MultiHop-RAG 上依次运行 A 和 B；
-5. 在 HuggingFace 和 RGB 上运行非回归检查；
-6. 使用相同结果文件生成对比报告。
+1. 扩展 MultiHop-RAG 数据契约并完成全部 gold evidence 映射预检；
+2. 使用同一路径生成 A/B 完全对齐的父文档和 chunks；
+3. 使用 A 组运行 MultiHop-RAG 小样本 retrieval-only smoke；
+4. 生成并冻结 B 组 context cache，运行相同 smoke；
+5. 分别全量构建 A/B 新索引；
+6. 对完整 450 题运行 retrieval-only A/B，并生成 paired bootstrap 报告；
+7. I1 不达标则停止；达标后再运行完整 450 题的 GLM-5.2 + Gemini-3-Flash 端到端 A/B；
+8. 最终只运行一次 HuggingFace 和 RGB 非回归；
+9. 使用同一份 lineage 生成检索、回答、成本和错误对比报告。
 
 Smoke 失败或没有任何检索信号时，不继续扩大实验规模。
 
@@ -351,7 +406,22 @@ Smoke 失败或没有任何检索信号时，不继续扩大实验规模。
 
 ### 6.1 质量指标
 
-必须保持 benchmark 当前已有指标：
+I1 retrieval-only 必须计算：
+
+```text
+Document Recall@4 / @10 / @20
+Evidence Recall@4 / @10 / @20
+All-evidence Recall@4 / @10 / @20
+MRR
+NDCG
+逐样本 paired delta 和 paired bootstrap 95% CI
+```
+
+每个 query 还必须保存返回 chunk 的 ID、parent document ID、rank、score、命中的 gold
+document/evidence ID 和问题类型。指标必须使用同一份冻结的 evidence mapping 计算，聚合值按
+全量、comparison、inference、temporal 分别报告。
+
+I2 端到端继续保持 benchmark 当前已有指标：
 
 ```text
 Faithfulness
@@ -363,18 +433,8 @@ Context Recall
 Context Entity Recall
 ```
 
-如果复现链路可以稳定获得逐查询检索结果，还应记录：
-
-```text
-每个 query 的检索文本
-返回 chunk 的 ID、rank 和 score
-gold evidence coverage
-all-evidence-hit
-Recall@k
-MRR 或 nDCG
-```
-
-检索指标用于解释收益来源；最终是否有业务价值仍需同时观察 Answer Correctness。
+I1 检索指标用于先判断索引方法本身是否有效；I2 的 Answer Correctness 和 RAGAS context 指标
+用于判断检索收益能否传导到最终回答。两阶段结果不得相互替代。
 
 ### 6.2 成本与运行指标
 
@@ -414,19 +474,36 @@ A / B 聚合指标
 
 ## 7. 有效性标准
 
-### 7.1 主要通过条件
+### 7.1 I1 方法有效性门槛
+
+相对同批次 A 组，B 组在完整 MultiHop-RAG retrieval-only 结果上应同时满足：
+
+1. 预先冻结的主指标 `All-evidence Recall@10` 绝对提升不少于 `0.05`；
+2. `Evidence Recall@10` 绝对提升不少于 `0.03`；
+3. 两个主指标的逐样本 paired bootstrap 95% CI 下界均大于 `0`；
+4. `Document Recall@4` 和 `Evidence Recall@4` 均不得下降超过 `0.01`；
+5. comparison、inference、temporal 三类中至少两类为正向，任一类不得下降超过 `0.02`；
+6. A/B 样本、query、chunks、检索参数和有效分母完全一致，且没有未披露的 evidence mapping
+   或 contextualization 失败。
+
+I1 未达到以上条件时停止，不运行 I2，也不进入框架化设计。
+
+### 7.2 I2 端到端有效性门槛
 
 相对同批次 A 组，B 组在完整 MultiHop-RAG 上应同时满足：
 
 1. `Answer Correctness` 绝对提升不少于 `0.02`；
-2. `Context Recall` 绝对提升不少于 `0.03`，或可计算的 all-evidence Recall
-   绝对提升不少于 `0.05`；
+2. `Context Recall` 绝对提升不少于 `0.03`；
 3. `Context Precision` 下降不超过 `0.01`；
-4. 提升不是由减少有效样本、忽略失败或改变检索次数获得；
-5. 逐样本 paired comparison 的 95% bootstrap confidence interval 不跨越零；
-6. 完整实验不存在未披露的 contextualization 失败样本。
+4. Answer Correctness 的逐样本 paired bootstrap 95% CI 下界大于 `0`；
+5. 提升不是由减少有效样本、忽略失败或改变检索次数获得；
+6. 完整实验不存在未披露的 Agent、Judge 或 contextualization 失败样本。
 
-历史 MultiHop-RAG 指标可以作为方向性参照，但不作为正式门槛：
+### 7.3 历史能力参照与声明边界
+
+历史数值按数据集分别作为第二道能力参照，不能跨数据集使用。
+
+MultiHop-RAG 的历史 tRPC-Agent-Go 参照为：
 
 ```text
 Answer Correctness: 0.4984
@@ -434,9 +511,23 @@ Context Precision:  0.3574
 Context Recall:     0.7733
 ```
 
-正式判断只比较同批次 A 和 B。
+HuggingFace 54 题的历史 tRPC-Agent-Go 参照为：
 
-### 7.2 非回归条件
+```text
+Answer Correctness: 0.8104
+Context Precision:  0.7098
+Context Recall:     0.9444
+```
+
+`0.8104 / 0.7098 / 0.9444` 只能用于最终 HF54 非回归，不能作为 MultiHop-RAG 的通过阈值。
+如果 B 只超过同批次 GLM-5.2 A、但没有达到对应数据集的历史参照，只能说明方法对当前 GLM
+lane 有效，不能声称能力已超过 README 中的原实现。
+
+即使 B 数值超过历史参照，由于 Agent、代码、索引和运行时行为仍可能不同，也只能表述为
+“超过 README 同数据集历史参照”。若要严格声称“超过原 tRPC-Agent-Go 实现”，还需要在
+当前 harness 下复跑 DeepSeek-V3.2 + Gemini-3-Flash 对照。
+
+### 7.4 非回归条件
 
 HuggingFace Documentation 和 RGB 的关键指标相对 A 组：
 
@@ -445,16 +536,19 @@ HuggingFace Documentation 和 RGB 的关键指标相对 A 组：
 - 反事实或错误信息导致的回答退化不得明显增加；
 - 不得出现系统性同文档错误 chunk 排名上升。
 
-### 7.3 结论
+### 7.5 结论
 
-实验结论只能是以下三类之一：
+实验结论只能是以下四类之一：
 
 ```text
-有效：
-达到主要通过条件和非回归条件，可以开始评估框架化价值。
+有效且达到能力目标：
+I1、I2、对应数据集历史能力参照和非回归条件均达到，可以开始评估框架化价值。
+
+方法有效但能力目标未达到：
+同批次 B 显著超过 A，但未达到对应历史参照；只证明当前 GLM lane 上的方法收益。
 
 无效：
-没有达到主要通过条件，停止框架化设计。
+I1 或 I2 没有达到方法有效性门槛，停止框架化设计。
 
 证据不足：
 存在运行失败、样本不一致、指标不可比或显著性不足，
@@ -473,11 +567,12 @@ HuggingFace Documentation 和 RGB 的关键指标相对 A 组：
 6. Context 只使用父文档信息，空输出和生成失败均可观察。
 7. 同一组已生成 contexts 被检索和回答评测重复使用。
 8. A、B 使用相互隔离的全新索引，不复用不兼容向量。
-9. 完整 MultiHop-RAG 结果包含逐样本和聚合对比。
-10. HuggingFace 和 RGB 完成非回归检查。
-11. 质量、成本和错误分别报告。
-12. 结果可以通过保存的命令、manifest 和 context 缓存复现。
-13. 结论严格依据本文有效性条件，不因单个指标上涨而宣称方案有效。
+9. I1 完整 MultiHop-RAG 结果包含逐样本检索结果、gold evidence 命中和聚合对比。
+10. 只有 I1 达标才运行 I2，且 I2 完整 450 题包含逐样本和聚合对比。
+11. HuggingFace 和 RGB 只在最终阶段完成一次非回归检查。
+12. 质量、成本和错误分别报告。
+13. 结果可以通过保存的命令、manifest 和 context 缓存复现。
+14. 结论严格依据本文有效性条件，不因单个指标上涨而宣称方案有效。
 
 ## 9. 需求边界
 
@@ -487,7 +582,8 @@ HuggingFace Documentation 和 RGB 的关键指标相对 A 组：
 一个最小 Contextual Embedding 实验实现
 + feature-off / feature-on 的同路径对照
 + 可审计和复用的 context 实验产物
-+ 完整 benchmark A/B 结果
++ evidence-aware retrieval-only A/B 与门禁报告
++ 通过门禁后的完整端到端 A/B 结果
 + 质量、成本和停止结论
 ```
 
