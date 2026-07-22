@@ -1,6 +1,6 @@
 # Contextual Embedding 有效性验证需求
 
-状态：I0 已关闭；I1 Retrieval-only A/B 协议待评审
+状态：I0 已关闭；I1 实现已落地，等待服务器生成 Context、建索引并运行 A/B
 
 日期：2026-07-20
 
@@ -310,9 +310,21 @@ Document hit 以 `parent_document_id` 判断；Evidence hit 以预先生成并�
 映射判断。无法映射的 evidence 必须进入数据校验报告并使正式证据为 `insufficient`，不得在
 计算分母时静默忽略。
 
-当前代码尚未满足该 lane：`QAItem` 没有 evidence metadata，MultiHop loader 只把 gold facts
-拼入 `context`，`main.py` 又固定初始化 RAGAS。I1 因此需要单独的 evidence-aware
-retrieval-only runner，而不是在现有端到端 runner 中增加旁路条件。
+I1 已通过 benchmark 独立实验目录实现，不修改现有 `QAItem` 或端到端 `main.py`：
+
+```text
+benchmark/knowledge/contextual_retrieval/
+```
+
+该路径负责 sealed parent/query/chunk/case artifacts、exact evidence-to-chunk 映射、可恢复
+Context cache、retrieval-only A/B、paired bootstrap 和门禁报告。Go benchmark 服务增加同路径
+`baseline` / `contextual` manifest source；两组只改变 `Document.EmbeddingText`，并继续通过 TAG
+现有 Embedder 和 VectorStore 路径建索引。具体命令和服务器目录约定见该目录 README。
+
+使用官方 MultiHop-RAG 文件完成的本地数据预检为：609 个父文档、13,086 个 chunks、450 道题、
+1,209 条 gold evidence；全部 evidence 均完成 exact parent-span 到 chunk 的映射，缺失数为 0。
+该预检只证明数据与实现契约可运行，不是方法效果结果；正式结论仍需在服务器上生成完整
+Context cache、建立全新 A/B 索引并运行同批次 450 题。
 
 ### 4.4 I2 End-to-end contextual A/B lane
 
