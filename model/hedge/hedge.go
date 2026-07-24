@@ -17,6 +17,7 @@ import (
 	"errors"
 	"fmt"
 	"maps"
+	"slices"
 	"time"
 
 	"trpc.group/trpc-go/trpc-agent-go/internal/jsonmap"
@@ -541,6 +542,7 @@ func cloneRequest(request *model.Request) (*model.Request, error) {
 	}
 	cloned.ExtraFields = jsonmap.Clone(request.ExtraFields)
 	cloned.Headers = maps.Clone(request.Headers)
+	cloned.ToolOrder = slices.Clone(request.ToolOrder)
 	if len(request.Tools) > 0 {
 		cloned.Tools = make(map[string]tool.Tool, len(request.Tools))
 		for name, toolImpl := range request.Tools {

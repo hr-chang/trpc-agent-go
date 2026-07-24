@@ -249,6 +249,49 @@ func Test_convertTools(t *testing.T) {
 	assert.Equal(t, "t1", params[0].OfTool.Name)
 }
 
+func TestBuildChatRequest_RespectsToolOrder(t *testing.T) {
+	m := New("dummy")
+	tools := map[string]tool.Tool{
+		"bash": stubTool{decl: &tool.Declaration{
+			Name:        "bash",
+			InputSchema: &tool.Schema{Type: "object"},
+		}},
+		"code_search": stubTool{decl: &tool.Declaration{
+			Name:        "code_search",
+			InputSchema: &tool.Schema{Type: "object"},
+		}},
+	}
+
+	for _, tt := range []struct {
+		name      string
+		toolOrder []string
+		want      []string
+	}{
+		{name: "default", want: []string{"bash", "code_search"}},
+		{
+			name:      "preferred prefix",
+			toolOrder: []string{"code_search", "bash"},
+			want:      []string{"code_search", "bash"},
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			req, err := m.buildChatRequest(&model.Request{
+				Messages:  []model.Message{model.NewUserMessage("test")},
+				Tools:     tools,
+				ToolOrder: tt.toolOrder,
+			})
+			require.NoError(t, err)
+			require.Len(t, req.Tools, len(tt.want))
+			got := make([]string, 0, len(req.Tools))
+			for _, param := range req.Tools {
+				require.NotNil(t, param.OfTool)
+				got = append(got, param.OfTool.Name)
+			}
+			require.Equal(t, tt.want, got)
+		})
+	}
+}
+
 func Test_buildToolDescription_AppendsOutputSchema(t *testing.T) {
 	schema := &tool.Schema{
 		Type: "object",

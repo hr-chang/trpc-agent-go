@@ -1369,6 +1369,46 @@ func TestModel_convertTools(t *testing.T) {
 	assert.Empty(t, props, "expected empty properties for no-arg tool")
 }
 
+func TestModel_buildChatRequest_RespectsToolOrder(t *testing.T) {
+	m := New("dummy")
+	tools := map[string]tool.Tool{
+		"bash": stubTool{decl: &tool.Declaration{
+			Name:        "bash",
+			InputSchema: &tool.Schema{Type: "object"},
+		}},
+		"code_search": stubTool{decl: &tool.Declaration{
+			Name:        "code_search",
+			InputSchema: &tool.Schema{Type: "object"},
+		}},
+	}
+
+	for _, tt := range []struct {
+		name      string
+		toolOrder []string
+		want      []string
+	}{
+		{name: "default", want: []string{"bash", "code_search"}},
+		{
+			name:      "preferred prefix",
+			toolOrder: []string{"code_search", "bash"},
+			want:      []string{"code_search", "bash"},
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			req, _ := m.buildChatRequest(&model.Request{
+				Tools:     tools,
+				ToolOrder: tt.toolOrder,
+			})
+			require.Len(t, req.Tools, len(tt.want))
+			got := make([]string, 0, len(req.Tools))
+			for _, param := range req.Tools {
+				got = append(got, param.Function.Name)
+			}
+			require.Equal(t, tt.want, got)
+		})
+	}
+}
+
 // TestModel_convertTools_StrictProxyTopLevelProperties validates the final JSON
 // payload shape expected by strict OpenAI-compatible proxies.
 func TestModel_convertTools_StrictProxyTopLevelProperties(t *testing.T) {
@@ -2511,7 +2551,7 @@ func TestWithTokenTailoring_SubtractsToolsBudgetForAutoLimit(t *testing.T) {
 			}},
 		},
 	}
-	toolsTokens := m.estimateToolsTokens(context.Background(), req.Tools)
+	toolsTokens := m.estimateToolsTokens(context.Background(), req.Tools, req.ToolOrder)
 	require.Greater(t, toolsTokens, 0)
 
 	m.applyTokenTailoring(context.Background(), req)
@@ -2556,7 +2596,7 @@ func TestWithTokenTailoring_KeepsExplicitLimitBeforeToolsBudget(t *testing.T) {
 			}},
 		},
 	}
-	require.Greater(t, m.estimateToolsTokens(context.Background(), req.Tools), 0)
+	require.Greater(t, m.estimateToolsTokens(context.Background(), req.Tools, req.ToolOrder), 0)
 
 	m.applyTokenTailoring(context.Background(), req)
 

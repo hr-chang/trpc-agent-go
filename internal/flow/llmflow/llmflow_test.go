@@ -48,6 +48,7 @@ import (
 
 func TestCloneRequestForContextCompactionDeepCopiesExtraFields(t *testing.T) {
 	req := &model.Request{
+		ToolOrder: []string{"code_search", "bash"},
 		ExtraFields: map[string]any{
 			"prompt_cache_key": "cache-1",
 			"metadata": map[string]any{
@@ -63,10 +64,12 @@ func TestCloneRequestForContextCompactionDeepCopiesExtraFields(t *testing.T) {
 	cloned.ExtraFields["prompt_cache_key"] = "changed"
 	clonedMetadata := cloned.ExtraFields["metadata"].(map[string]any)
 	clonedMetadata["session_id"] = "changed"
+	cloned.ToolOrder[0] = "changed"
 
 	require.Equal(t, "cache-1", req.ExtraFields["prompt_cache_key"])
 	metadata := req.ExtraFields["metadata"].(map[string]any)
 	require.Equal(t, "session-1", metadata["session_id"])
+	require.Equal(t, []string{"code_search", "bash"}, req.ToolOrder)
 }
 
 // mockLongRunnerTool implements tool.Tool and a LongRunning() flag.

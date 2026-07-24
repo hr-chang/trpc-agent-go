@@ -293,7 +293,7 @@ func (m *Model) buildChatRequest(request *model.Request) (*anthropic.MessageNewP
 	}
 
 	// Convert tools
-	tools := convertTools(request.Tools)
+	tools := convertToolsInOrder(request.Tools, request.ToolOrder)
 
 	// Apply cache control breakpoints if any cache option is enabled.
 	// Uses multiple independent breakpoints (up to 4 allowed by Anthropic) for optimal caching:
@@ -1022,8 +1022,15 @@ func convertContentBlock(contents []anthropic.ContentBlockUnion) model.Message {
 
 // convertTools maps our tool declarations to Anthropic tool parameters.
 func convertTools(tools map[string]tool.Tool) []anthropic.ToolUnionParam {
+	return convertToolsInOrder(tools, nil)
+}
+
+func convertToolsInOrder(
+	tools map[string]tool.Tool,
+	preferred []string,
+) []anthropic.ToolUnionParam {
 	var result []anthropic.ToolUnionParam
-	for _, t := range toolorder.SortedTools(tools) {
+	for _, t := range toolorder.OrderedTools(tools, preferred) {
 		declaration := t.Declaration()
 		result = append(result, anthropic.ToolUnionParam{
 			OfTool: &anthropic.ToolParam{

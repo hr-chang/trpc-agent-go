@@ -17,7 +17,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"sort"
 	"strings"
 	"time"
 
@@ -25,6 +24,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime"
 	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime/document"
 	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime/types"
+	"trpc.group/trpc-go/trpc-agent-go/internal/toolorder"
 	"trpc.group/trpc-go/trpc-agent-go/log"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
@@ -370,7 +370,7 @@ func (m *Model) buildConverseInput(request *model.Request) (*bedrockruntime.Conv
 
 	// Set tool configuration
 	if len(request.Tools) > 0 {
-		input.ToolConfig = buildToolConfig(request.Tools)
+		input.ToolConfig = buildToolConfig(request.Tools, request.ToolOrder)
 	}
 
 	// Set additional model request fields (thinking/reasoning configuration)
@@ -400,7 +400,7 @@ func (m *Model) buildConverseStreamInput(request *model.Request) (*bedrockruntim
 
 	// Set tool configuration
 	if len(request.Tools) > 0 {
-		input.ToolConfig = buildToolConfig(request.Tools)
+		input.ToolConfig = buildToolConfig(request.Tools, request.ToolOrder)
 	}
 
 	// Set additional model request fields (thinking/reasoning configuration)
@@ -874,21 +874,16 @@ func buildInferenceConfig(config model.GenerationConfig) *types.InferenceConfigu
 }
 
 // buildToolConfig builds the tool configuration.
-func buildToolConfig(tools map[string]tool.Tool) *types.ToolConfiguration {
+func buildToolConfig(
+	tools map[string]tool.Tool,
+	preferred []string,
+) *types.ToolConfiguration {
 	if len(tools) == 0 {
 		return nil
 	}
 
-	// Sort by name for stability
-	toolNames := make([]string, 0, len(tools))
-	for name := range tools {
-		toolNames = append(toolNames, name)
-	}
-	sort.Strings(toolNames)
-
 	var bedrockTools []types.Tool
-	for _, name := range toolNames {
-		t := tools[name]
+	for _, t := range toolorder.OrderedTools(tools, preferred) {
 		declaration := t.Declaration()
 
 		// Convert tool.Schema to document.Interface as JSON schema

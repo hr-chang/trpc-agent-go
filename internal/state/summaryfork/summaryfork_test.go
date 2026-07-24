@@ -59,7 +59,8 @@ func TestAttachSnapshotsRequest(t *testing.T) {
 		ExtraFields: map[string]any{
 			"metadata": map[string]any{"id": "one"},
 		},
-		Headers: map[string]string{"X-Trace": "one"},
+		Headers:   map[string]string{"X-Trace": "one"},
+		ToolOrder: []string{"code_search", "bash"},
 	}
 
 	inv := agent.NewInvocation()
@@ -73,6 +74,7 @@ func TestAttachSnapshotsRequest(t *testing.T) {
 	req.StructuredOutput.JSONSchema.Schema["type"] = "array"
 	req.ExtraFields["metadata"].(map[string]any)["id"] = "two"
 	req.Headers["X-Trace"] = "two"
+	req.ToolOrder[0] = "changed"
 
 	got, ok := Request(inv)
 	require.True(t, ok)
@@ -84,13 +86,16 @@ func TestAttachSnapshotsRequest(t *testing.T) {
 	require.Equal(t, "object", got.StructuredOutput.JSONSchema.Schema["type"])
 	require.Equal(t, "one", got.ExtraFields["metadata"].(map[string]any)["id"])
 	require.Equal(t, "one", got.Headers["X-Trace"])
+	require.Equal(t, []string{"code_search", "bash"}, got.ToolOrder)
 
 	got.GenerationConfig.Stop[0] = "again"
 	*got.GenerationConfig.MaxTokens = 30
+	got.ToolOrder[0] = "changed again"
 	again, ok := Request(inv)
 	require.True(t, ok)
 	require.Equal(t, 10, *again.GenerationConfig.MaxTokens)
 	require.Equal(t, "END", again.GenerationConfig.Stop[0])
+	require.Equal(t, []string{"code_search", "bash"}, again.ToolOrder)
 }
 
 func TestAttachHandlesNilAndZeroValueRequest(t *testing.T) {

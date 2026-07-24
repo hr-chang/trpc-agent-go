@@ -565,7 +565,7 @@ func buildRequestAttributes(req *model.Request) []attribute.KeyValue {
 	// Add tool definitions as best-effort structured array (JSON string fallback)
 	if len(req.Tools) > 0 {
 		definitions := make([]*tool.Declaration, 0, len(req.Tools))
-		for _, t := range toolorder.SortedTools(req.Tools) {
+		for _, t := range toolorder.OrderedTools(req.Tools, req.ToolOrder) {
 			definitions = append(definitions, t.Declaration())
 		}
 		if len(definitions) > 0 {

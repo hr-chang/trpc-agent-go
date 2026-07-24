@@ -16,6 +16,7 @@ import (
 	"errors"
 	"fmt"
 	"runtime/debug"
+	"slices"
 	"sort"
 	"time"
 
@@ -1676,6 +1677,7 @@ func cloneRequestForContextCompaction(req *model.Request) *model.Request {
 		req.StructuredOutput,
 	)
 	cloned.ExtraFields = cloneJSONMapForContextCompaction(req.ExtraFields)
+	cloned.ToolOrder = slices.Clone(req.ToolOrder)
 	if req.Tools != nil {
 		cloned.Tools = make(map[string]tool.Tool, len(req.Tools))
 		for name, t := range req.Tools {

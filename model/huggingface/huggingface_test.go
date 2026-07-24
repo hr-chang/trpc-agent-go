@@ -1809,6 +1809,25 @@ func TestConvertRequest(t *testing.T) {
 		assert.Len(t, hfReq.Messages, 2)
 		assert.Equal(t, "system", hfReq.Messages[0].Role)
 	})
+
+	t.Run("with_tool_order", func(t *testing.T) {
+		request := &model.Request{
+			Messages: []model.Message{
+				{Role: model.RoleUser, Content: "Hello"},
+			},
+			Tools: map[string]tool.Tool{
+				"b-key": &mockToolForConvert{declaration: &tool.Declaration{Name: "second"}},
+				"a-key": &mockToolForConvert{declaration: &tool.Declaration{Name: "first"}},
+			},
+			ToolOrder: []string{"b-key"},
+		}
+
+		hfReq, err := m.convertRequest(request)
+		require.NoError(t, err)
+		require.Len(t, hfReq.Tools, 2)
+		assert.Equal(t, "second", hfReq.Tools[0].Function.Name)
+		assert.Equal(t, "first", hfReq.Tools[1].Function.Name)
+	})
 }
 
 // TestConvertMessage tests message conversion with different content types

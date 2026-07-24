@@ -44,10 +44,15 @@ func TestConvertToolsSortsByKeyAndSkipsInvalidTools(t *testing.T) {
 		"skip":  nil,
 	}
 
-	result := convertTools(toolsMap)
+	result := convertTools(toolsMap, nil)
 	require.Len(t, result, 2)
 	require.Equal(t, "zeta", result[0].Function.Name)
 	require.Equal(t, "alpha", result[1].Function.Name)
+
+	result = convertTools(toolsMap, []string{"b-key"})
+	require.Len(t, result, 2)
+	require.Equal(t, "alpha", result[0].Function.Name)
+	require.Equal(t, "zeta", result[1].Function.Name)
 }
 
 // testStubCounter is a stub TokenCounter for testing token tailoring.

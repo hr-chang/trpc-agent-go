@@ -633,7 +633,7 @@ func (m *Model) applyTokenTailoring(ctx context.Context, request *model.Request)
 			outputReserveTokens,
 			maxInputTokens,
 		)
-		toolsTokens := m.estimateToolsTokens(ctx, request.Tools)
+		toolsTokens := m.estimateToolsTokens(ctx, request.Tools, request.ToolOrder)
 		if toolsTokens > 0 {
 			maxInputTokens = max(maxInputTokens-toolsTokens, 0)
 			log.DebugfContext(
@@ -705,11 +705,12 @@ func (m *Model) hardInputBudget(contextWindow, outputReserveTokens int) int {
 func (m *Model) estimateToolsTokens(
 	ctx context.Context,
 	tools map[string]tool.Tool,
+	toolOrder []string,
 ) int {
 	if len(tools) == 0 || m.tokenCounter == nil {
 		return 0
 	}
-	converted := m.convertTools(tools)
+	converted := m.convertToolsInOrder(tools, toolOrder)
 	if len(converted) == 0 {
 		return 0
 	}
@@ -734,7 +735,7 @@ func (m *Model) buildChatRequest(request *model.Request) (*openai.ChatCompletion
 	chatRequest := &openai.ChatCompletionNewParams{
 		Model:    shared.ChatModel(m.name),
 		Messages: m.convertMessages(request.Messages),
-		Tools:    m.convertTools(request.Tools),
+		Tools:    m.convertToolsInOrder(request.Tools, request.ToolOrder),
 	}
 
 	// Set response_format for native structured outputs when requested.
@@ -1436,8 +1437,15 @@ func (m *Model) convertToolCalls(toolCalls []model.ToolCall) []openai.ChatComple
 }
 
 func (m *Model) convertTools(tools map[string]tool.Tool) []openai.ChatCompletionToolParam {
+	return m.convertToolsInOrder(tools, nil)
+}
+
+func (m *Model) convertToolsInOrder(
+	tools map[string]tool.Tool,
+	preferred []string,
+) []openai.ChatCompletionToolParam {
 	var result []openai.ChatCompletionToolParam
-	for _, t := range toolorder.SortedTools(tools) {
+	for _, t := range toolorder.OrderedTools(tools, preferred) {
 		declaration := t.Declaration()
 		// Convert the InputSchema to JSON to correctly map to OpenAI's expected format
 		schemaBytes, err := json.Marshal(declaration.InputSchema)

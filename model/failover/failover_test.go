@@ -89,6 +89,7 @@ func TestCloneRequestDeepCopiesSerializableFields(t *testing.T) {
 		Tools: map[string]tool.Tool{
 			"lookup": toolImpl,
 		},
+		ToolOrder: []string{"lookup"},
 	}
 	cloned, err := cloneRequest(request)
 	require.NoError(t, err)
@@ -104,6 +105,7 @@ func TestCloneRequestDeepCopiesSerializableFields(t *testing.T) {
 	clonedMetadata["session_id"] = "changed"
 	cloned.Headers["X-Session-ID"] = "changed"
 	cloned.Tools["other"] = stubTool{name: "other"}
+	cloned.ToolOrder[0] = "changed"
 	assert.Equal(t, "user", request.Messages[1].Content)
 	assert.Equal(t, "cache-1", request.ExtraFields["prompt_cache_key"])
 	metadata := request.ExtraFields["metadata"].(map[string]any)
@@ -113,6 +115,7 @@ func TestCloneRequestDeepCopiesSerializableFields(t *testing.T) {
 	assert.Equal(t, "object", request.StructuredOutput.JSONSchema.Schema["type"])
 	assert.Len(t, request.Tools, 1)
 	assert.Same(t, toolImpl, cloned.Tools["lookup"])
+	assert.Equal(t, []string{"lookup"}, request.ToolOrder)
 }
 
 func TestCloneRequestReturnsMarshalError(t *testing.T) {

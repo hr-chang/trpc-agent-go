@@ -11,6 +11,8 @@
 package summaryfork
 
 import (
+	"slices"
+
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/internal/jsonmap"
 	"trpc.group/trpc-go/trpc-agent-go/model"
@@ -101,6 +103,7 @@ func cloneRequest(req *model.Request) *model.Request {
 	cloned.ExtraFields = jsonmap.Clone(req.ExtraFields)
 	cloned.Headers = cloneHeaders(req.Headers)
 	cloned.Tools = cloneTools(req.Tools)
+	cloned.ToolOrder = slices.Clone(req.ToolOrder)
 	return &cloned
 }
 

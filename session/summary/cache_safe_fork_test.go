@@ -101,6 +101,7 @@ func TestCloneRequestForCacheSafeFork_DeepClonesMutableFields(t *testing.T) {
 		ExtraFields: map[string]any{"metadata": map[string]any{"id": "one"}},
 		Headers:     map[string]string{"X-Trace": "one"},
 		Tools:       map[string]tool.Tool{"lookup": lookupTool},
+		ToolOrder:   []string{"lookup"},
 	}
 
 	cloned := cloneRequestForCacheSafeFork(parent)
@@ -127,6 +128,7 @@ func TestCloneRequestForCacheSafeFork_DeepClonesMutableFields(t *testing.T) {
 	cloned.ExtraFields["metadata"].(map[string]any)["id"] = "two"
 	cloned.Headers["X-Trace"] = "two"
 	delete(cloned.Tools, "lookup")
+	cloned.ToolOrder[0] = "changed"
 
 	require.Equal(t, "text part", *parent.Messages[0].ContentParts[0].Text)
 	require.Equal(t, byte(1), parent.Messages[0].ContentParts[1].Image.Data[0])
@@ -141,6 +143,7 @@ func TestCloneRequestForCacheSafeFork_DeepClonesMutableFields(t *testing.T) {
 	require.Equal(t, "one", parent.ExtraFields["metadata"].(map[string]any)["id"])
 	require.Equal(t, "one", parent.Headers["X-Trace"])
 	require.Same(t, lookupTool, parent.Tools["lookup"])
+	require.Equal(t, []string{"lookup"}, parent.ToolOrder)
 }
 
 func TestSessionSummarizer_CacheSafeForkOptions(t *testing.T) {

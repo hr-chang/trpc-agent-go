@@ -342,7 +342,7 @@ func (m *Model) buildChatRequest(request *model.Request) (*hunyuan.ChatCompletio
 
 	// Convert tools if present.
 	if len(request.Tools) > 0 {
-		chatRequest.Tools = convertTools(request.Tools)
+		chatRequest.Tools = convertTools(request.Tools, request.ToolOrder)
 	}
 
 	// Set generation parameters.
@@ -632,9 +632,12 @@ func convertMessage(msg model.Message) (*hunyuan.ChatCompletionMessageParam, err
 }
 
 // convertTools converts our tool declarations to Hunyuan tool parameters.
-func convertTools(tools map[string]tool.Tool) []*hunyuan.ChatCompletionMessageTool {
+func convertTools(
+	tools map[string]tool.Tool,
+	preferred []string,
+) []*hunyuan.ChatCompletionMessageTool {
 	var result []*hunyuan.ChatCompletionMessageTool
-	for _, tl := range toolorder.SortedTools(tools) {
+	for _, tl := range toolorder.OrderedTools(tools, preferred) {
 		decl := tl.Declaration()
 
 		schemaBytes, err := json.Marshal(decl.InputSchema)

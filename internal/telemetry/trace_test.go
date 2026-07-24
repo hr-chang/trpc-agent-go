@@ -932,6 +932,7 @@ func TestBuildRequestAttributes_ToolDefinitions(t *testing.T) {
 			"beta":  testTool{decl: &tool.Declaration{Name: "beta", Description: "second"}},
 			"skip":  nil, // ensure nil entries are ignored
 		},
+		ToolOrder: []string{"beta", "alpha"},
 	}
 
 	attrs := buildRequestAttributes(req)
@@ -950,8 +951,8 @@ func TestBuildRequestAttributes_ToolDefinitions(t *testing.T) {
 	require.NoError(t, json.Unmarshal([]byte(toolAttr.Value.AsString()), &defs))
 	require.Len(t, defs, 2)
 
-	require.Equal(t, "alpha", defs[0].Name)
-	require.Equal(t, "beta", defs[1].Name)
+	require.Equal(t, "beta", defs[0].Name)
+	require.Equal(t, "alpha", defs[1].Name)
 }
 
 func TestBuildRequestAttributes_ToolDefinitionsStableAcrossCalls(t *testing.T) {

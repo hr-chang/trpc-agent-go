@@ -924,7 +924,7 @@ func TestBuildToolConfig(t *testing.T) {
 		}},
 	}
 
-	config := buildToolConfig(tools)
+	config := buildToolConfig(tools, nil)
 	require.NotNil(t, config)
 	require.Len(t, config.Tools, 2)
 
@@ -936,13 +936,22 @@ func TestBuildToolConfig(t *testing.T) {
 	tool1, ok := config.Tools[1].(*types.ToolMemberToolSpec)
 	require.True(t, ok)
 	assert.Equal(t, "search", aws.ToString(tool1.Value.Name))
+
+	config = buildToolConfig(tools, []string{"search"})
+	require.Len(t, config.Tools, 2)
+	tool0, ok = config.Tools[0].(*types.ToolMemberToolSpec)
+	require.True(t, ok)
+	assert.Equal(t, "search", aws.ToString(tool0.Value.Name))
+	tool1, ok = config.Tools[1].(*types.ToolMemberToolSpec)
+	require.True(t, ok)
+	assert.Equal(t, "calculator", aws.ToString(tool1.Value.Name))
 }
 
 func TestBuildToolConfig_Empty(t *testing.T) {
-	config := buildToolConfig(nil)
+	config := buildToolConfig(nil, nil)
 	assert.Nil(t, config)
 
-	config = buildToolConfig(map[string]tool.Tool{})
+	config = buildToolConfig(map[string]tool.Tool{}, nil)
 	assert.Nil(t, config)
 }
 
@@ -955,7 +964,7 @@ func TestBuildToolConfig_NilSchema(t *testing.T) {
 		}},
 	}
 
-	config := buildToolConfig(tools)
+	config := buildToolConfig(tools, nil)
 	require.NotNil(t, config)
 	require.Len(t, config.Tools, 1)
 }

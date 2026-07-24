@@ -13,6 +13,7 @@ import (
 	"encoding/json"
 	"fmt"
 
+	"trpc.group/trpc-go/trpc-agent-go/internal/toolorder"
 	"trpc.group/trpc-go/trpc-agent-go/model"
 	imodel "trpc.group/trpc-go/trpc-agent-go/model/internal/model"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
@@ -49,7 +50,8 @@ func (m *Model) convertRequest(req *model.Request) (*ChatCompletionRequest, erro
 	// Convert tools.
 	if len(req.Tools) > 0 {
 		hfReq.Tools = make([]Tool, 0, len(req.Tools))
-		for _, t := range req.Tools {
+		tools := requestTools(req)
+		for _, t := range tools {
 			hfTool, err := convertTool(t)
 			if err != nil {
 				return nil, fmt.Errorf("failed to convert tool: %w", err)
@@ -66,6 +68,19 @@ func (m *Model) convertRequest(req *model.Request) (*ChatCompletionRequest, erro
 	}
 
 	return hfReq, nil
+}
+
+func requestTools(req *model.Request) []tool.Tool {
+	if len(req.ToolOrder) > 0 {
+		return toolorder.OrderedTools(req.Tools, req.ToolOrder)
+	}
+	// Preserve the provider's existing map iteration when no request-level
+	// preference is supplied.
+	result := make([]tool.Tool, 0, len(req.Tools))
+	for _, t := range req.Tools {
+		result = append(result, t)
+	}
+	return result
 }
 
 // convertMessage converts a model.Message to a HuggingFace ChatMessage.

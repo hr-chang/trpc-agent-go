@@ -10,6 +10,7 @@ package summary
 
 import (
 	"context"
+	"slices"
 
 	"trpc.group/trpc-go/trpc-agent-go/internal/jsonmap"
 	"trpc.group/trpc-go/trpc-agent-go/model"
@@ -74,6 +75,7 @@ func cloneRequestForCacheSafeFork(req *model.Request) *model.Request {
 	cloned.ExtraFields = jsonmap.Clone(req.ExtraFields)
 	cloned.Headers = cloneHeadersForCacheSafeFork(req.Headers)
 	cloned.Tools = cloneToolsForCacheSafeFork(req.Tools)
+	cloned.ToolOrder = slices.Clone(req.ToolOrder)
 	return &cloned
 }
 

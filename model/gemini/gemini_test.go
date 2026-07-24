@@ -501,6 +501,41 @@ func TestModel_convertTools_MultipleToolsGroupedIntoSingleTool(t *testing.T) {
 		"declarations must be sorted by tool name for deterministic output")
 }
 
+func TestModel_buildChatConfig_RespectsToolOrder(t *testing.T) {
+	m := &Model{}
+	tools := map[string]tool.Tool{
+		"bash":        &namedTool{name: "bash"},
+		"code_search": &namedTool{name: "code_search"},
+	}
+
+	for _, tt := range []struct {
+		name      string
+		toolOrder []string
+		want      []string
+	}{
+		{name: "default", want: []string{"bash", "code_search"}},
+		{
+			name:      "preferred prefix",
+			toolOrder: []string{"code_search", "bash"},
+			want:      []string{"code_search", "bash"},
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := m.buildChatConfig(&model.Request{
+				Tools:     tools,
+				ToolOrder: tt.toolOrder,
+			})
+			require.Len(t, cfg.Tools, 1)
+			require.Len(t, cfg.Tools[0].FunctionDeclarations, len(tt.want))
+			got := make([]string, 0, len(tt.want))
+			for _, declaration := range cfg.Tools[0].FunctionDeclarations {
+				got = append(got, declaration.Name)
+			}
+			require.Equal(t, tt.want, got)
+		})
+	}
+}
+
 func TestNormalizeToolSchema_NilSchemaReturnsNil(t *testing.T) {
 	require.Nil(t, normalizeToolSchema("tool", "input", nil))
 }

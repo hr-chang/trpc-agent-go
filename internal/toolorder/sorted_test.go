@@ -46,6 +46,48 @@ func TestSortedToolsFiltersNilDeclarationAndSortsByKey(t *testing.T) {
 	require.Equal(t, "alpha", sorted[1].Declaration().Name)
 }
 
+func TestOrderedToolsUsesPreferredPrefixAndSortsRemaining(t *testing.T) {
+	tools := map[string]tool.Tool{
+		"gamma":       testOrderTool{name: "gamma"},
+		"bash":        testOrderTool{name: "bash"},
+		"code_search": testOrderTool{name: "code_search"},
+		"alpha":       testOrderTool{name: "alpha"},
+	}
+
+	ordered := OrderedTools(tools, []string{"code_search", "bash"})
+	require.Equal(t, []string{"code_search", "bash", "alpha", "gamma"}, testToolNames(ordered))
+}
+
+func TestOrderedToolsIgnoresUnknownDuplicatesAndInvalidTools(t *testing.T) {
+	tools := map[string]tool.Tool{
+		"b-key": testOrderTool{name: "alpha"},
+		"a-key": testOrderTool{name: "zeta"},
+		"nil":   nil,
+		"empty": nilDeclarationTool{},
+	}
+
+	ordered := OrderedTools(tools, []string{"missing", "b-key", "b-key", "empty"})
+	require.Equal(t, []string{"alpha", "zeta"}, testToolNames(ordered))
+}
+
+func TestOrderedToolsEmptyPreferredPreservesSortedTools(t *testing.T) {
+	tools := map[string]tool.Tool{
+		"b": testOrderTool{name: "beta"},
+		"a": testOrderTool{name: "alpha"},
+	}
+
+	require.Equal(t, testToolNames(SortedTools(tools)), testToolNames(OrderedTools(tools, nil)))
+	require.Equal(t, testToolNames(SortedTools(tools)), testToolNames(OrderedTools(tools, []string{})))
+}
+
+func testToolNames(tools []tool.Tool) []string {
+	names := make([]string, 0, len(tools))
+	for _, tl := range tools {
+		names = append(names, tl.Declaration().Name)
+	}
+	return names
+}
+
 type testOrderTool struct {
 	name string
 }

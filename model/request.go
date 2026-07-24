@@ -557,6 +557,12 @@ type Request struct {
 	Headers map[string]string `json:"-"`
 
 	Tools map[string]tool.Tool `json:"-"` // Tools are not serialized, handled separately
+
+	// ToolOrder is an optional preferred prefix of keys in Tools. A nil or empty
+	// value preserves the provider's existing default. When set, known tools are
+	// sent first in this order; unknown and duplicate names are ignored, and
+	// tools not listed here retain the default alphabetical order.
+	ToolOrder []string `json:"-"`
 }
 
 // RequestOption configures a Request.

@@ -664,7 +664,7 @@ func (m *Model) applyTokenTailoring(ctx context.Context, request *model.Request)
 // buildChatConfig converts our Request to Gemini request config.
 func (m *Model) buildChatConfig(request *model.Request) *genai.GenerateContentConfig {
 	chatRequest := &genai.GenerateContentConfig{
-		Tools: m.convertTools(request.Tools),
+		Tools: m.convertToolsInOrder(request.Tools, request.ToolOrder),
 	}
 
 	// Explicitly set ToolConfig when tools are present to use AUTO mode.
@@ -907,6 +907,13 @@ func thoughtSignatureFromString(signature string) []byte {
 }
 
 func (m *Model) convertTools(tools map[string]tool.Tool) []*genai.Tool {
+	return m.convertToolsInOrder(tools, nil)
+}
+
+func (m *Model) convertToolsInOrder(
+	tools map[string]tool.Tool,
+	preferred []string,
+) []*genai.Tool {
 	// Vertex AI requires all function declarations to be grouped into a single
 	// Tool object. Sending one Tool per function causes a 400 INVALID_ARGUMENT:
 	// "Multiple tools are supported only when they are all search tools."
@@ -914,7 +921,7 @@ func (m *Model) convertTools(tools map[string]tool.Tool) []*genai.Tool {
 		return nil
 	}
 	decls := make([]*genai.FunctionDeclaration, 0, len(tools))
-	for _, t := range toolorder.SortedTools(tools) {
+	for _, t := range toolorder.OrderedTools(tools, preferred) {
 		decl := t.Declaration()
 		funcDeclaration := &genai.FunctionDeclaration{
 			Description: decl.Description,

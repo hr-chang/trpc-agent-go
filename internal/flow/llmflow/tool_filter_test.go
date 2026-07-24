@@ -17,6 +17,7 @@ import (
 	"trpc.group/trpc-go/trpc-agent-go/agent"
 	"trpc.group/trpc-go/trpc-agent-go/event"
 	"trpc.group/trpc-go/trpc-agent-go/internal/flow/toolsnapshot"
+	"trpc.group/trpc-go/trpc-agent-go/model"
 	"trpc.group/trpc-go/trpc-agent-go/tool"
 )
 
@@ -931,6 +932,33 @@ func TestGetFilteredTools_AgentWithoutUserToolsProvider(t *testing.T) {
 	if filtered[0].Declaration().Name != "tool_1" {
 		t.Error("expected only tool_1 to pass filter")
 	}
+}
+
+func TestPopulateRequestToolsPreservesExplicitOrder(t *testing.T) {
+	f := New(nil, nil, Options{})
+	mockAgent := &mockAgentWithoutUserTools{
+		name: "test-agent",
+		allTools: []tool.Tool{
+			&mockTool{name: "zeta"},
+			&mockTool{name: "alpha"},
+			&mockTool{name: "beta"},
+		},
+	}
+	inv := agent.NewInvocation()
+	inv.Agent = mockAgent
+	inv.RunOptions.ToolFilter = tool.NewIncludeToolNamesFilter("alpha", "zeta")
+	req := &model.Request{ToolOrder: []string{"zeta", "alpha"}}
+
+	f.populateRequestTools(context.Background(), inv, req)
+
+	require.Equal(t, []string{"zeta", "alpha"}, req.ToolOrder)
+	require.Len(t, req.Tools, 2)
+	require.Contains(t, req.Tools, "alpha")
+	require.Contains(t, req.Tools, "zeta")
+
+	defaultReq := &model.Request{}
+	f.populateRequestTools(context.Background(), inv, defaultReq)
+	require.Nil(t, defaultReq.ToolOrder)
 }
 
 // TestGetFilteredTools_FrameworkToolsNeverFiltered tests that framework tools are never filtered.

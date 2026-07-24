@@ -326,7 +326,7 @@ func (m *Model) buildChatRequest(request *model.Request) (*api.ChatRequest, erro
 	chatRequest := &api.ChatRequest{
 		Model:    m.name,
 		Messages: messages,
-		Tools:    convertTools(request.Tools),
+		Tools:    convertTools(request.Tools, request.ToolOrder),
 		Options:  m.options,
 	}
 	if chatRequest.Options == nil {
@@ -686,9 +686,9 @@ func convertMessage(msg model.Message) (api.Message, error) {
 }
 
 // convertTools converts our tool declarations to Ollama tool parameters.
-func convertTools(tools map[string]tool.Tool) []api.Tool {
+func convertTools(tools map[string]tool.Tool, preferred []string) []api.Tool {
 	var result []api.Tool
-	for _, tl := range toolorder.SortedTools(tools) {
+	for _, tl := range toolorder.OrderedTools(tools, preferred) {
 		properties := api.NewToolPropertiesMap()
 		var required []string
 

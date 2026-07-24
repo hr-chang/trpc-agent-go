@@ -461,11 +461,16 @@ func Test_convertTools(t *testing.T) {
 		"skip":  nil,
 	}
 
-	result := convertTools(toolsMap)
+	result := convertTools(toolsMap, nil)
 	assert.Equal(t, 2, len(result))
 	assert.Equal(t, functionToolType, result[0].Type)
 	assert.Equal(t, "search_city", result[0].Function.Name)
 	assert.Equal(t, "get_weather", result[1].Function.Name)
+
+	result = convertTools(toolsMap, []string{"b-key"})
+	assert.Equal(t, 2, len(result))
+	assert.Equal(t, "get_weather", result[0].Function.Name)
+	assert.Equal(t, "search_city", result[1].Function.Name)
 }
 
 // Test_buildToolDescription tests tool description building.
