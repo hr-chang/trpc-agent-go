@@ -1,127 +1,144 @@
 # Contextual Embedding 有效性验证需求
 
-状态：I0 已关闭；I1 正式 retrieval-only A/B 已完成，门禁 `fail`，停止 I2 与框架化设计
+状态：I0 已关闭；I1（GLM Context）已完成且为有效负结果；I2（DeepSeek Agentic A/B）实现已完成，待远端探针与实验
 
 日期：2026-07-20
 
-最近更新：2026-07-22
+最近更新：2026-07-25
 
-## 1. 验证目标
+## 1. 需求目标
 
-业务使用 tRPC-Agent-Go（下文简称 TAG）把长文档切分为 chunk，并将每个 chunk 独立生成
-向量后写入知识库。
-
-独立 chunk 可能丢失其在父文档中的必要语境。例如：
-
-- chunk 中只出现“该公司”“这一版本”等指代；
-- 关键实体、时间或产品名称只出现在文档标题和其他章节；
-- 多篇文档包含相似表述，必须结合所属文档才能区分；
-- 回答一个问题需要从多篇文档中召回多个相关 chunks。
-
-本需求验证以下假设：
+本需求只验证以下方法假设：
 
 ```text
-在其他条件保持一致时，
-为每个 chunk 补充其在完整父文档中的必要语境后再生成向量，
-能够提高 TAG 的检索质量和最终回答质量。
+在相同语料、chunk、Embedding、检索模式、Agent 和 Judge 下，
+为每个 chunk 增加由完整父文档生成的短 Context 后再进行 embedding，
+能否提高 MultiHop-RAG 上的 Agentic RAG 最终回答质量。
 ```
 
-本需求不预设该方法最终会纳入 TAG，也不预设其公共 API、扩展点或生产形态。只有验证结果
-达到本文定义的有效性门槛后，才评估是否值得进行框架化设计。
+本轮正式结论只比较同批次 A/B，不与 README 的历史聚合数值作严格横向比较，也不预设该
+方法最终会纳入 tRPC-Agent-Go（下文简称 TAG）。只有 I2 达到本文门槛后，才讨论框架化和
+非回归验证。
 
-## 2. 待验证方法
+## 2. 方法与对照组
 
-### 2.1 方法定义
-
-实验方法固定为 Document-aware Contextual Embedding：
+### 2.1 A/B 唯一处理差异
 
 ```text
-完整父文档 + 当前 chunk
-    ↓
-生成当前 chunk 的简短检索语境
-    ↓
-检索语境 + 当前原有 embedding text
-    ↓
-使用与基线相同的 embedder 生成向量
+A / Baseline:
+BaseEmbeddingText → BGE-M3 → A index
+
+B / Contextual:
+DeepSeek Context + delimiter + BaseEmbeddingText → BGE-M3 → B index
 ```
 
-生成的检索语境应说明当前 chunk 在父文档中的主题、实体、时间、章节或指代关系，并满足：
+`BaseEmbeddingText` 是相同实验加载路径为 chunk 生成的原始 embedding 输入。B 不得覆盖或
+丢弃它。
 
-- 只使用父文档中存在的信息；
-- 不回答用户问题；
-- 不添加文档外事实；
-- 不改写或摘要整个 chunk；
-- 不改变当前 chunk 的业务含义；
-- 输出为空时视为失败。
+### 2.2 Context 约束
 
-实验使用固定模型、固定 prompt 和确定性生成配置。影响输出的模型或 prompt 发生变化时，
-视为不同实验配置，不得合并结果。
+Context 由 DeepSeek-V3.2 根据“完整父文档 + 当前 chunk”离线生成，并满足：
 
-### 2.2 Embedding 输入
+- 使用现有 `anthropic-contextual-retrieval-v1` prompt，不根据 I1/I2 结果调参；
+- query-independent，不读取 benchmark question 或 gold evidence；
+- `temperature=0`，不传 `reasoning`；
+- 只补充 chunk 的主题、实体、时间、章节或指代语境；
+- 不回答问题，不添加父文档外信息，不重写整个 chunk；
+- 空输出、截断、父文档不完整或生成失败均为可见失败；
+- 全量生成后冻结并复用同一 cache，不在检索或回答阶段重新生成。
 
-对照组使用 TAG 当前原本会发送给 embedder 的文本：
+Context 只进入 `Document.EmbeddingText`。A/B 的 `Document.Content`、metadata、chunk ID、顺序
+和 Agent 可见知识文本必须完全相同。
+
+## 3. 已冻结的正式实验配置
 
 ```text
-BaseEmbeddingText
+primary dataset:       MultiHop-RAG
+parents:               609
+chunks:                13,086
+questions:             450
+question types:        comparison / inference / temporal，各 150
+contextualizer:        DeepSeek-V3.2（仅 B 的离线索引构建）
+answer model:          DeepSeek-V3.2（A/B 相同）
+judge model:           GLM-5.2（provider model ID: glm52，A/B 相同）
+embedding model:       BGE-M3，1024 dimensions（A/B 相同）
+vector store:          PGVector（A/B 独立新表）
+effective search mode: pure Vector（A/B 相同）
+retrieval k per call:  4
+agent repeats:         3 × 450 / arm
+judge max tokens:      65,536
+judge reasoning:       omitted
+Judge client retry:    0
+RAGAS request attempt: 1 attempt total
+Judge runtime:         Python 3.11.6 / RAGAS 0.2.15 /
+                       langchain-openai 0.2.14 / openai 1.109.1 /
+                       datasets 2.21.0
 ```
 
-实验组使用：
+I2 共运行 `3 × 450 × 2 = 2,700` 个 Agent case。这里的三次是完整实验重复，不是把同一个
+Judge 调用三次，也不是要求 Agent 固定检索三次。
+
+## 4. 代码边界
+
+### 4.1 必须沿用的 legacy 行为
+
+除实验必需差异外，A/B 必须沿用原 benchmark 的：
+
+- Agent Prompt 原文；
+- `temperature=0`；
+- tool 名称、描述和输入协议；
+- fresh session；
+- Agent 自主生成和改写 search query 的行为；
+- 原工具循环终止语义；
+- 错误返回语义。
+
+Prompt 中“最多搜索 3 次”仍是原始指令，不新增代码级三次限制。不得增加
+`WithMaxToolIterations(500)` 或其他框架内硬限制。运行保护由实验 controller 的单请求
+timeout 提供；超时记录为该 case 失败，不通过重新运行 Agent 隐藏。
+
+### 4.2 Pure Vector 的隔离方式
+
+README 声称历史实验使用纯 Vector，但 legacy `/answer` 的 Agent tool 实际没有应用
+`--search-mode`。本轮已经选择纯 Vector，因此必须让它在 A/B 中真实生效，但不得改变 legacy
+服务行为。
+
+实现要求：
 
 ```text
-Context + 明确分隔符 + BaseEmbeddingText
+index_variant=legacy:
+    沿用原 Agent knowledge tool 路径
+
+index_variant=baseline/contextual:
+    仅实验服务使用配置的 search_mode
+    正式运行要求 search_mode=1
 ```
 
-如果 reader 已提供自定义 `EmbeddingText`，它属于 `BaseEmbeddingText`，不得被 context
-覆盖或丢弃。
+controller 必须从 `/config` 验证 Agent 的有效检索模式，而不能只记录启动参数。
 
-Context 只用于生成向量。实验不得改变：
+### 4.3 实验代码位置
 
-- 原始 `Document.Content`；
-- 检索结果返回的 chunk 文本；
-- 回答模型看到的知识内容；
-- query；
-- chunk 边界和顺序；
-- sparse/keyword 索引文本；
-- reranker 输入。
+I2 runner、controller、Judge 适配、统计和产物应放在
+`benchmark/knowledge/contextual_retrieval/` 下。不得继续扩展 legacy `knowledge/main.py` 来承载
+I2 语义。
 
-## 3. 实验实现
+独立的 Agent/Judge/Embedding URL、key 和 gateway header 路由可以保留；没有设置实验变量时，
+legacy fallback 必须保持原行为。任何 I0/HF54 专用 calibration、resume、validation 或 runner
+不得成为 I2 的启动门禁。
 
-### 3.1 实现原则
+## 5. 数据、Context 与索引身份
 
-实验实现只需方便验证本文假设，不要求形成正式框架能力。
+### 5.1 Sealed 数据
 
-允许采用：
+沿用已经冻结的数据与 exact evidence mapping：
 
-- 内部或实验性 package；
-- benchmark 专用加载器或 source wrapper；
-- 非导出的 option、配置或辅助类型；
-- 固定的一种模型和 prompt；
-- 只支持本次 benchmark 使用的文档类型；
-- 每组实验使用全新索引并全量重建；
-- 实验目录内的 context 缓存和运行 manifest。
+```text
+parents manifest: 609 parents
+chunks manifest:  13,086 chunks
+cases manifest:   450 questions / 1,209 gold evidence records
+mapping:          1,209 / 1,209 exact parent-span mappings
+```
 
-不应仅为了实验提前设计公共 Contextualizer、通用 source 协议或跨 vector store 抽象。
-
-### 3.2 相同的数据路径
-
-基线组和实验组必须使用同一个实验加载路径：
-
-1. 读取相同的完整父文档；
-2. 使用相同 chunker 和参数；
-3. 产生内容、顺序和 metadata 相同的 chunks；
-4. 基线组直接使用 `BaseEmbeddingText`；
-5. 实验组生成 context 后使用 `Context + BaseEmbeddingText`；
-6. 调用相同 embedder 和 vector store 写入独立索引。
-
-不能让基线继续走旧 loader、实验组走新 loader，否则无法排除文档读取、chunking 或 metadata
-变化带来的影响。
-
-### 3.3 父文档与 chunk
-
-父文档必须是切分前的完整文档内容。实验不得通过拼接带 overlap 的 chunks 反推父文档，
-也不得把当前 chunk 自身当作父文档。
-
-每个 chunk 至少保留以下实验标识：
+每个 chunk 至少保留：
 
 ```text
 parent document ID
@@ -129,393 +146,109 @@ chunk ID
 chunk index
 parent content hash
 chunk content hash
+metadata
 ```
 
-这些标识只用于确保 A/B 对齐和结果审计，不要求形成 TAG 的正式文档模型。
+### 5.2 新实验身份
 
-### 3.4 Context 生成与缓存
+旧 GLM Context cache 和旧 B index 只能作为 I1 历史证据，不得用于本轮 DeepSeek A/B。
 
-Context 生成发生在 chunking 之后、embedding 之前。
+本轮必须生成：
 
-每个生成结果应保存为可复用的实验产物，至少包含：
+- 新 DeepSeek Context cache；
+- 新 A 表与新 B 表；
+- 新 run directory；
+- 包含模型、prompt、数据、代码和索引 digest 的 manifest。
+
+Context 缺失、为空、hash 不匹配、未以正常 `stop` 结束或数量不是 13,086 时禁止
+构建正式 B。必须按 chunk manifest 顺序将全部 `chunk_id + context_hash` 封装为
+`context_set_digest`，并贯穿 Context summary、B 索引、runtime config 和 I2 lineage。A/B 表
+相同、已有非空未知表或索引行数不等于 13,086 时禁止运行。
+
+构建索引和运行 I2 时，根仓库与 benchmark 子仓库都必须为 clean checkout；索引
+state、Agent controller 与 Judge manifest 必须绑定同一组精确 commit。
+
+## 6. I1 与 I2
+
+### 6.1 I1 Retrieval-only
 
 ```text
-parent document ID
-chunk ID
-model
-prompt identifier
-generated context
-input / output / cache token（提供方支持时）
-elapsed time
-error
+原始问题 → A/B 各直接检索一次 → Recall / MRR / NDCG
 ```
 
-同一实验配置的检索和回答评测必须复用已经生成的 context，不得在每次评测时重新生成，
-避免生成波动和额外费用污染 A/B 结果。
+I1 不运行 Agent 或 Judge，只回答静态原始 query 的向量排名是否改善。
 
-缓存 key 可以由父文档、chunk、模型和 prompt 的 hash 组成，但不要求形成生产级缓存协议。
+2026-07-22 的 GLM Context I1 是证据完整的负结果。它不代表 DeepSeek Context 的结果，也不
+阻塞 I2。新索引完成后先跑 DeepSeek Context 的 30 题 I1 smoke，作为机制诊断：
+只有 smoke 达到既有 promotion 门槛才扩大到完整 450 题 I1；如果为 `stop`，保留
+smoke 证据即可。两种结果都不阻塞 I2。
 
-### 3.5 失败处理
-
-Context 生成失败时：
-
-- 记录明确错误和对应 parent/chunk；
-- 不静默使用原始 `BaseEmbeddingText`；
-- 不把空 context 当作成功；
-- 不把失败样本排除后继续宣称完整实验成功；
-- 不在同一实验索引中混合无法识别的 contextual 和 non-contextual vectors。
-
-父文档超过实验模型输入限制时，不得静默截断。可以将该文档记为不支持并终止该次完整
-实验，或采用固定且写入 manifest 的实验处理规则。
-
-## 4. Benchmark 前置条件
-
-Benchmark 复现基础已由独立任务交付，当前任务已接管服务器、运行目录和后续实验链路。
-本需求负责把交付环境整理为 clean checkout、版本化 runner 和可审计证据；不再重新追求
-旧环境或历史数值的严格复现。
-
-复现任务应向本实验提供：
+### 6.2 I2 Agentic RAG
 
 ```text
-可执行的运行命令
-完整环境和模型配置
-使用的数据版本
-当前 trpc-agent-go-impl 的结果文件
-运行日志和有效配置
+问题
+→ DeepSeek Agent
+→ 一次或多次自主 search
+→ 最终回答
+→ 冻结回答
+→ GLM Judge
 ```
 
-历史 README 数值只用于检查复现结果的量级和趋势。README 作者已确认，历史实验实际使用
-`DeepSeek-V3.2 + Gemini-3-Flash + BGE-M3`；原 README 中的 Qwen3.5 Judge 是文档笔误。
-新方法的正式结论必须来自同一环境、同一代码版本和同一批次重新运行的 A/B，不得把新的
-实验组直接与历史结果当作严格 A/B。
+I2 是本轮是否存在 Agentic RAG 方法价值的主要依据。A/B 初始问题相同、配置相同，但后续
+query、实际搜索次数和轨迹允许不同；这些差异是索引结果影响 Agent 行为的下游效果。
 
-### 4.1 Baseline reproduction lane
+## 7. 执行协议
 
-I0 已建立并完成独立的 baseline reproduction lane，用于验证：
+### 7.1 Context compatibility probe
 
-- 模型、Embedding、PGVector 和 RAGAS 链路可以运行；
-- 运行失败具有足够的诊断信息；
-- 重复运行的失败率和指标波动可以观察；
-- 昂贵的 Q&A 结果可以在 evaluator 失败后复用。
+正式 cache 前固定选取 20 个结构差异较大的 chunks，只检查：
 
-I0 baseline reproduction lane 的最终标识为：
+- API 和模型配置可用；
+- 输出非空、简短且为检索语境；
+- 没有回答问题、整段改写或明显文档外信息；
+- 完整父文档未被静默截断。
+
+Probe 不读取 benchmark 结果，不用于选择效果更好的 prompt。
+
+### 7.2 Operational smoke
+
+从三个问题类型各固定 10 题，共 30 题。Smoke 只验证：
+
+- A/B 两个服务、索引和有效配置正确；
+- Agent、Embedding、PGVector 与 GLM Judge 全链路可运行；
+- 逐样本 checkpoint、trace、错误和 Judge 指标完整；
+- timeout 与并发不会造成明显系统性失败。
+
+Smoke 指标方向不作为扩量门禁。只要证据链完整且不存在基础设施故障，就进入正式 I2。
+
+### 7.3 三次正式重复
+
+- 每个 repeat 包含相同 450 题和两条 arm；
+- 每题在同一 repeat 内配对；
+- A/B 请求顺序按题平衡交错，下一 repeat 反转；
+- case 顺序使用 manifest 中固定 seed；
+- 两组使用相同并发和 timeout；
+- 每个 Agent case 只采样一次；
+- 不在看到首轮效果后决定是否补跑后两轮；
+- 三轮全部结束后才生成正式结论。
+
+## 8. 逐样本与聚合产物
+
+每个 Agent case 至少保存：
 
 ```text
-run kind: baseline_reproduction
-evidence scope: baseline_stability
-dataset: HuggingFace Documentation（54 个 QA）
-knowledge base: trpc-agent-go
-evaluator: RAGAS
-retrieval k: 4
-vector store: PGVector
-search mode: hybrid（0）
-index mode: reuse existing PGVector index
-chunk size / overlap: 500 / 50
-embedding dimensions: 1024
-answer model: GLM-5.2
-judge model: Gemini-3-Flash
-embedding model: BGE-M3
-judge max output tokens: 65536
-judge reasoning parameter: omitted
-judge structured-output whole-prompt max attempts: 5
-prompt declared max searches: 3
-hard max tool iterations: 500
-evidence status: valid
-formal A/B eligible: false
+case ID / question type / repeat / arm / request order
+question / ground truth
+answer / contexts
+每次 search query
+每次返回的 chunk ID、parent ID、rank、score、metadata
+每次和累计 gold evidence 命中
+实际 tool call 数
+完整可审计 trace
+Agent status / error / elapsed time / token（可获得时）
 ```
 
-I0 最终完成 54/54 样本、0 个 Agent 错误，七项指标均为 54/54 个有限值：
-
-| 指标 | 当前 GLM-5.2 + Gemini-3-Flash | 历史 DeepSeek-V3.2 + Gemini-3-Flash | 差值 |
-|---|---:|---:|---:|
-| Faithfulness | 0.9026 | 0.9815 | -0.0789 |
-| Answer Relevancy | 0.9694 | 0.8799 | +0.0895 |
-| Answer Correctness | 0.6612 | 0.8104 | -0.1492 |
-| Answer Similarity | 0.7850 | 0.7240 | +0.0610 |
-| Context Precision | 0.6149 | 0.7098 | -0.0949 |
-| Context Recall | 0.8333 | 0.9444 | -0.1111 |
-| Context Entity Recall | 0.4964 | 0.4867 | +0.0097 |
-
-两次结果使用相同 Judge 和 Embedding，但 Agent、代码版本、索引、有效检索行为和工具预算
-仍可能不同，因此只作方向性比较。该结果完成的是 evidence harness 验收，不证明
-Contextual Embedding 有效，也不是正式 A 组。I0 至此关闭；在最终非回归阶段前不再重复运行
-HF54。
-
-Judge 必须显式配置独立于 Agent 的 model、URL 和 API key。缺少任一显式配置、任一项
-继续回退到 Agent，或者实际 model、endpoint、credential 未分离时，该轮 evidence 状态必须
-为 `insufficient`。Judge 固定为 Gemini-3-Flash，并由 manifest 和运行 fingerprint 记录。
-Judge reasoning 参数必须保持未提供，并在 manifest 中记录
-`reasoning_parameter_supplied=false`。对于 OpenAI 兼容接口返回的纯文本 block list，允许在
-进入 RAGAS 前无损归一化为字符串；若结构化输出缺字段，则只允许重新执行完整 prompt，最多
-5 次，不得补默认字段或默认分数。重试耗尽后该指标保持缺失，该轮 evidence 状态必须为
-`insufficient`；归一化次数、结构化重试次数和恢复次数必须写入结果产物。
-若完整 evaluator 已产出且仅有少量 metric cell 缺失，允许从该结果执行缺失单元恢复，
-但必须校验源结果与 samples checkpoint、保持 Judge 评分身份一致、禁止覆盖任何已有有限值，
-并在新产物中记录源结果摘要、源/当前仓库版本、请求/恢复/剩余 cell 及独立恢复耗时与用量。
-timeout 与 worker 数可作为执行控制调整；模型、端点、`max_tokens`、reasoning 未提供状态及
-结构化输出策略不得变化。恢复后仍有任一缺失值时，evidence 继续为 `insufficient`。
-
-其中，`hard max tool iterations = 500` 是 modified-harness watchdog，用于避免近似无界的
-工具循环永久挂起，不代表正式实验的科学检索预算。Prompt 声明次数、硬上限和每个样本的
-实际工具调用次数必须分别记录。
-
-Baseline reproduction lane 可以为观察稳定性而使用 `--skip-load` 复用已存在的索引，但
-必须披露实际 PGVector table、文档行数、索引是否复用以及当前解析到的 TAG module 版本。
-该 lane 的结果只能说明当前 GLM-5.2 Agent、冻结的独立 Judge 和 BGE-M3 配置的
-可运行性、失败率和波动，不能：
-
-- 作为正式 Contextual Embedding A 组；
-- 与 benchmark README 中其他默认模型配置的历史结果直接合并；
-- 用于判断 Contextual Embedding 有效或无效；
-- 在存在 Agent、Judge 或指标缺失时描述为干净的质量基线。
-
-Agent 失败样本仍应以明确占位值保留在固定问题分母中，并单独报告失败率。如果任一 Agent
-或 Judge 失败、任一指标缺失或运行配置不可追溯，该轮结果的证据状态必须为
-`insufficient`，但仍可作为排障产物保存。
-
-### 4.2 Judge identity（已完成）
-
-历史实验和当前 I0 均使用 Gemini-3-Flash Judge；当前 I0 额外确认了 Agent 与 Judge 的 model、
-URL 和 credential 显式分离。后续 I2 继续冻结该 Judge，reasoning 参数保持未提供，只提高
-`max_tokens` 上限，不以成本作为模型选择或实验通过条件。
-
-如果后续替换 Judge，应将其视为新的评测配置，只重放固定 Q&A samples 进行完成率、稳定性、
-受控劣化方向和聚合偏差校准，不重新调用 Agent。不同 Judge 配置的数值不得直接合并。
-
-I1 是确定性的 retrieval-only 评测，不初始化 Agent、RAGAS 或 Gemini Judge；用于生成
-chunk context 的模型属于索引构建配置，不是 Judge，并且其输出必须缓存。
-
-### 4.3 I1 Retrieval-only contextual A/B lane
-
-下一阶段先运行独立的 retrieval-only A/B：
-
-```text
-run kind: retrieval_contextual_ab
-evidence scope: retrieval_effectiveness
-primary dataset: MultiHop-RAG（609 篇文章、450 道题）
-query: 原始问题，不做 rewrite
-agent / RAGAS / judge: none
-retrieval k: 4、10、20
-index: A/B 分别使用全新且隔离的索引
-loader: A/B 使用同一个实验加载路径
-embedding model: A/B 均为 BGE-M3
-retrieval configuration: A/B 完全相同
-context cache: B 组固定并复用同一批 context
-```
-
-MultiHop-RAG 的每个评测项必须保留稳定 question ID、`question_type` 和完整原始
-`evidence_list`，不能只把 `fact` 拼接到 `QAItem.context`。语料预处理还必须为每篇文章、每个
-gold evidence 和每个 chunk 建立稳定 ID，并保存 evidence 到 parent document / chunk 的映射。
-Document hit 以 `parent_document_id` 判断；Evidence hit 以预先生成并冻结的 evidence-to-chunk
-映射判断。无法映射的 evidence 必须进入数据校验报告并使正式证据为 `insufficient`，不得在
-计算分母时静默忽略。
-
-I1 已通过 benchmark 独立实验目录实现，不修改现有 `QAItem` 或端到端 `main.py`：
-
-```text
-benchmark/knowledge/contextual_retrieval/
-```
-
-该路径负责 sealed parent/query/chunk/case artifacts、exact evidence-to-chunk 映射、可恢复
-Context cache、retrieval-only A/B、paired bootstrap 和门禁报告。Go benchmark 服务增加同路径
-`baseline` / `contextual` manifest source；两组只改变 `Document.EmbeddingText`，并继续通过 TAG
-现有 Embedder 和 VectorStore 路径建索引。具体命令和服务器目录约定见该目录 README。
-
-使用官方 MultiHop-RAG 文件完成的本地数据预检为：609 个父文档、13,086 个 chunks、450 道题、
-1,209 条 gold evidence；全部 evidence 均完成 exact parent-span 到 chunk 的映射，缺失数为 0。
-该预检只证明数据与实现契约可运行，不是方法效果结果；正式结论仍需在服务器上生成完整
-Context cache、建立全新 A/B 索引并运行同批次 450 题。
-
-#### 4.3.1 I1 smoke 结果（已完成）
-
-2026-07-22 已在服务器完成正式 Context cache、独立 A/B 索引和分层 30 题 retrieval-only
-smoke：
-
-```text
-root commit:               596e4a4423cc6c4d94f823a956c3084d0a40678b
-benchmark commit:          5ae80bb59d9fa257144723c6ccf2a9e32ef27ae3
-contexts:                  13,086 / 13,086
-context errors / missing:  0 / 0
-A/B index rows:            13,086 / 13,086
-paired valid cases:        30 / 30
-runtime errors:            0
-failed request attempts:   0
-smoke promotion:           promote
-formal method conclusion:  false
-```
-
-主要方向性结果为：
-
-```text
-All-evidence Recall@10: +0.0333，95% CI [ 0.0000, 0.1000]
-All-evidence Recall@20: +0.1000，95% CI [ 0.0000, 0.2333]
-Document Recall@4:      +0.0833，95% CI [ 0.0083, 0.1639]
-Evidence Recall@10:     +0.0528，95% CI [-0.0250, 0.1250]
-MRR:                    -0.0526，95% CI [-0.1696, 0.0785]
-NDCG@20:                -0.0162，95% CI [-0.0744, 0.0451]
-```
-
-该结果满足第 7.0 节扩量条件，只授权复用同一 Context cache 和同一组 complete indexes 运行
-完整 450 题 I1。它尚未达到或评估第 7.1 节门槛，不得描述为方法有效。精简证据记录见
-`benchmark/knowledge/contextual_retrieval/results/i1-smoke-20260722.md`，原始 sealed 产物保留在
-`/data/benchmark/contextual-retrieval/runs/smoke_001/`。
-
-#### 4.3.2 I1 正式结果（已完成）
-
-2026-07-22 已复用上述冻结 Context cache 和同一组 complete A/B indexes，完成 450 题
-retrieval-only 正式 A/B。正式 controller 先对当前 checkout 执行新的分层 30 题 conformance
-smoke，结果仍为 `promote`，随后运行完整评测；正式阶段未调用 `/load`，也未初始化 Agent、
-RAGAS 或 Judge。
-
-```text
-formal root commit:             055c85403f98856438690aeeef0eb642dc735a30
-formal benchmark commit:        baf70d43eb6f1c0622b325a0b0fc20b7acd001ab
-expected / completed:           450 / 450
-paired valid cases:             450
-runtime errors:                 0
-failed request attempts:        0
-evidence status:                valid
-formal A/B eligible:            true
-load endpoint called:           false
-formal gate:                    fail
-```
-
-主要正式结果为：
-
-```text
-All-evidence Recall@10: -0.0022，95% CI [-0.0333,  0.0311]
-All-evidence Recall@20: +0.0289，95% CI [-0.0044,  0.0644]
-Document Recall@4:      +0.0087，95% CI [-0.0159,  0.0341]
-Evidence Recall@10:     -0.0133，95% CI [-0.0376,  0.0107]
-Evidence Recall@20:     +0.0198，95% CI [-0.0048,  0.0448]
-Evidence Recall@4:      -0.0085，95% CI [-0.0302,  0.0137]
-MRR:                    -0.0226，95% CI [-0.0525,  0.0079]
-NDCG@20:                -0.0044，95% CI [-0.0207,  0.0118]
-```
-
-正式结果同时显示问题类型效果不一致：`comparison` 和 `temporal` 的 All-evidence Recall@10
-各为 `+0.0133`，`inference` 为 `-0.0333`；其中 inference 的 Evidence Recall@10 为
-`-0.0600`，95% CI `[-0.0956, -0.0250]`，MRR 和 NDCG@20 也显著下降。Recall@20 的正向
-结果只能视为探索性信号，不能替代预先冻结的 Recall@10 门槛。
-
-因此，本轮属于证据完整的负结果，而非“证据不足”。第 7.1 节的两个主指标提升、CI 和
-分题型一致性均未通过，结论为“无效”：不运行 I2、不运行最终非回归，也不进入 TAG 框架化
-设计。完整 lineage、逐项门禁和结果摘要见
-`benchmark/knowledge/contextual_retrieval/results/i1-formal-20260722.md`；原始 sealed 产物保留在
-`/data/benchmark/contextual-retrieval/runs/formal_001/`。
-
-### 4.4 I2 End-to-end contextual A/B lane
-
-只有 I1 达到第 7.1 节的方法有效性门槛后，才运行完整 450 题的端到端 A/B：
-
-```text
-run kind: formal_contextual_ab
-evidence scope: end_to_end_effectiveness
-primary dataset: MultiHop-RAG
-index: A/B 分别使用全新且隔离的索引
-loader: A/B 使用同一个实验加载路径
-answer model: A/B 均为 GLM-5.2
-judge model: A/B 均为 Gemini-3-Flash
-embedding model: A/B 均为 BGE-M3
-tool budget: A/B 使用相同且由代码硬执行的明确上限
-context cache: B 组固定并复用同一批 context
-```
-
-Baseline reproduction lane 中的旧索引、历史样本或聚合指标不得直接复用为正式 A。正式
-A/B 的具体硬检索上限在进入该 lane 前冻结，并写入 manifest；不能只依靠 Prompt 约束。
-
-本轮 I1 已于 2026-07-22 得到有效但未通过门槛的正式结果，因此 I2 未触发。Gemini Judge
-配置继续保留为已验收的 I0 基础设施，但本方案不再调用它。
-
-## 5. 对照实验
-
-### 5.1 必须运行的实验组
-
-只设置两个必要实验组：
-
-```text
-A. Baseline
-   BaseEmbeddingText → Embedder
-
-B. Contextual Embedding
-   Context + BaseEmbeddingText → 同一个 Embedder
-```
-
-两组必须使用：
-
-- 相同 TAG commit；
-- 相同 corpus 和问题集；
-- 相同文档顺序；
-- 相同 chunker、chunk size 和 overlap；
-- 相同 embedding 模型和维度；
-- 相同 vector store；
-- 相同 search mode、top-k 和过滤条件；
-- I1 使用相同 query 且两组都不运行 Agent 或 Judge；
-- I2 使用相同 Agent、query、prompt、最大检索次数、answer model 和 evaluator；
-- 相同错误样本处理规则；
-- 相互隔离且全新构建的索引。
-
-本次不通过增加 BM25、reranker、query rewrite 或其他检索方法来提高实验组指标。只有
-`B > A` 才能证明 Contextual Embedding 本身有效。
-
-### 5.2 数据集职责
-
-#### MultiHop-RAG
-
-MultiHop-RAG 是主要有效性数据集。它包含完整新闻文章和需要组合多篇文章证据的问题，
-用于判断 Contextual Embedding 是否改善多文档证据召回并提高最终回答质量。
-
-其结果承担是否继续投入的主要决策。
-
-#### HuggingFace Documentation
-
-HuggingFace Documentation 只用于最终一次普通文档非回归检查。
-
-I0 已完成其基础设施验收职责。该数据集规模较小，不再用于 I1 smoke，也不单独承担新方法
-有效性的结论。
-
-#### RGB
-
-RGB 用于检查噪声、信息整合和反事实鲁棒性。
-
-RGB 当前的 passage 本身就是独立文档，缺少可供 contextualization 利用的父文档语境，
-因此不用于证明正向收益，只用于检查新方法是否引入明显退化。
-
-### 5.3 运行顺序
-
-1. 扩展 MultiHop-RAG 数据契约并完成全部 gold evidence 映射预检；
-2. 使用同一路径生成 A/B 完全对齐的父文档和 chunks；
-3. 使用独立产物运行 Context 模型 probe，不写入正式 cache；
-4. probe 成功后生成并冻结完整 B 组 context cache；
-5. 分别全量构建 A/B 两个全新且隔离的索引；
-6. 在已完成的两个索引上运行三个问题类型各 10 题的同批次 retrieval-only smoke；
-7. smoke 升级门为 `promote` 时，复用同一 A/B 索引运行完整 450 题 retrieval-only A/B；
-8. I1 不达标则停止；达标后再运行完整 450 题的 GLM-5.2 + Gemini-3-Flash 端到端 A/B；
-9. 最终只运行一次 HuggingFace 和 RGB 非回归；
-10. 使用同一份 lineage 生成检索、回答、成本和错误对比报告。
-
-Smoke 失败或没有任何检索信号时，不继续扩大实验规模。
-
-## 6. 指标与实验产物
-
-### 6.1 质量指标
-
-I1 retrieval-only 必须计算：
-
-```text
-Document Recall@4 / @10 / @20
-Evidence Recall@4 / @10 / @20
-All-evidence Recall@4 / @10 / @20
-MRR
-NDCG
-逐样本 paired delta 和 paired bootstrap 95% CI
-```
-
-每个 query 还必须保存返回 chunk 的 ID、parent document ID、rank、score、命中的 gold
-document/evidence ID 和问题类型。指标必须使用同一份冻结的 evidence mapping 计算，聚合值按
-全量、comparison、inference、temporal 分别报告。
-
-I2 端到端继续保持 benchmark 当前已有指标：
+Judge 产物至少保存七个现有 RAGAS 指标的逐样本值、运行配置、错误、token 和耗时：
 
 ```text
 Faithfulness
@@ -527,195 +260,119 @@ Context Recall
 Context Entity Recall
 ```
 
-I1 检索指标用于先判断索引方法本身是否有效；I2 的 Answer Correctness 和 RAGAS context 指标
-用于判断检索收益能否传导到最终回答。两阶段结果不得相互替代。
-
-### 6.2 成本与运行指标
-
-质量与成本分别下结论。至少记录：
+还必须保存：
 
 ```text
-父文档数和 chunk 数
-context 生成成功数和失败数
-context 生成总耗时
-contextualization input / output / cache token
-contextualization 费用
-embedding 耗时
-索引总耗时
-索引存储变化
-query 平均延迟和 p95（可以获得时）
-```
-
-本需求不预设成本上限，但不得只报告质量提升而省略索引成本。
-
-### 6.3 必须保存的产物
-
-每次可用于结论的实验必须保存：
-
-```text
+Context cache 与 summary
+A/B index state
 运行 manifest
-父文档与 chunk 对齐清单
-context 缓存
-A / B 逐样本结果
-A / B 聚合指标
-错误清单
-成本和耗时
-最终对比报告
-复现实验的准确命令
+append-only Agent checkpoint 与终态 sealed answers
+Judge checkpoint
+paired aggregate
+bootstrap CI
+错误与失败率
+准确命令和代码/data/model lineage
 ```
 
-聚合结果不能替代逐样本结果。
+Controller 终态复用与 Judge 都必须验证 Agent checkpoint 实体的 SHA-256 和记录数，
+并与 sealed answers、Agent report 和 controller report 相互绑定。Judge 还必须记录并
+校验自身运行时的 root/benchmark clean commit，不得在 Judge 代码漂移后复用旧分数。
 
-## 7. 有效性标准
+聚合结果不得替代逐样本产物。
 
-### 7.0 I1 smoke 扩量门槛
+## 9. 统计方法
 
-Smoke 固定从 comparison、inference、temporal 三类各取 10 题，只决定是否值得扩大到完整
-450 题，不形成方法有效性结论，也不使用置信区间替代第 7.1 节正式门槛。
+每题先分别对 A、B 的三次 repeat 指标求均值，再计算该题 paired delta。不得把三次 repeat
+当作 1,350 个独立问题。
 
-只有以下条件全部满足时，smoke 报告的 `smoke_promotion.decision` 才能为 `promote`：
-
-1. 30/30 题 A/B 配对完成，0 个运行错误，0 个失败 request attempt；
-2. `All-evidence Recall@10` 或 `Evidence Recall@10` 至少一项绝对提升不小于 `0.01`；
-3. `Document Recall@4` 和 `Evidence Recall@4` 均不得下降超过 `0.05`；
-4. 任一问题类型的 `All-evidence Recall@10` 不得下降超过 `0.10`。
-
-运行证据不完整时结论为 `insufficient`；证据完整但没有上述方向性信号或存在明显退化时
-结论为 `stop`。`promote` 仅授权运行完整 I1，不表示该方法已通过第 7.1 节。
-
-### 7.1 I1 方法有效性门槛
-
-相对同批次 A 组，B 组在完整 MultiHop-RAG retrieval-only 结果上应同时满足：
-
-1. 预先冻结的主指标 `All-evidence Recall@10` 绝对提升不少于 `0.05`；
-2. `Evidence Recall@10` 绝对提升不少于 `0.03`；
-3. 两个主指标的逐样本 paired bootstrap 95% CI 下界均大于 `0`；
-4. `Document Recall@4` 和 `Evidence Recall@4` 均不得下降超过 `0.01`；
-5. comparison、inference、temporal 三类中至少两类为正向，任一类不得下降超过 `0.02`；
-6. A/B 样本、query、chunks、检索参数和有效分母完全一致，且没有未披露的 evidence mapping
-   或 contextualization 失败。
-
-I1 未达到以上条件时停止，不运行 I2，也不进入框架化设计。
-
-### 7.2 I2 端到端有效性门槛
-
-相对同批次 A 组，B 组在完整 MultiHop-RAG 上应同时满足：
-
-1. `Answer Correctness` 绝对提升不少于 `0.02`；
-2. `Context Recall` 绝对提升不少于 `0.03`；
-3. `Context Precision` 下降不超过 `0.01`；
-4. Answer Correctness 的逐样本 paired bootstrap 95% CI 下界大于 `0`；
-5. 提升不是由减少有效样本、忽略失败或改变检索次数获得；
-6. 完整实验不存在未披露的 Agent、Judge 或 contextualization 失败样本。
-
-### 7.3 历史能力参照与声明边界
-
-历史数值按数据集分别作为第二道能力参照，不能跨数据集使用。
-
-MultiHop-RAG 的历史 tRPC-Agent-Go 参照为：
+正式 CI 使用：
 
 ```text
-Answer Correctness: 0.4984
-Context Precision:  0.3574
-Context Recall:     0.7733
+paired stratified bootstrap
+strata: comparison / inference / temporal
+resamples: 10,000
+seed: 固定并写入 manifest
+confidence interval: two-sided 95%
 ```
 
-HuggingFace 54 题的历史 tRPC-Agent-Go 参照为：
+分题型指标用于解释异质性，不额外设置多个确认性显著性检验。
+
+## 10. 失败处理
+
+- A/B 使用固定 450 题分母；
+- Agent 最终失败不得删题，七项指标统一按预注册的最坏值 `0` 进入 ITT，并单报失败率和
+  success-only 诊断值；其中 Answer Correctness 是唯一确认性主指标，Context Precision 的
+  guardrail 也使用该固定分母，避免因失败删题产生选择偏差；
+- transport、timeout 和 HTTP attempt 全部保存；
+- 正式 Agent case 不因失败自动重新采样；
+- GLM Judge 每个冻结答案只评分一次；OpenAI client transport retry 为 `0`，RAGAS
+  `RunConfig.max_retries=1`（在 RAGAS 0.2.15 中表示一次总尝试）；
+- 不增加 whole-prompt 重试；RAGAS 自身既有 schema repair 可保留；
+- Judge 失败只影响 Judge 阶段，不得重新运行 Agent；
+- 正式主结果不使用 missing-cell resume 合并不同时间的 Judge 采样；
+- 任一 repeat 的 Context、索引、样本或指标不完整时，该 repeat 为 `insufficient`；
+- 不通过删除失败样本、缩小分母或事后改变 timeout 获得正向结论。
+
+## 11. I2 有效性门槛
+
+唯一确认性主指标为：
 
 ```text
-Answer Correctness: 0.8104
-Context Precision:  0.7098
-Context Recall:     0.9444
+mean(Answer Correctness_B - Answer Correctness_A)
 ```
 
-`0.8104 / 0.7098 / 0.9444` 只能用于最终 HF54 非回归，不能作为 MultiHop-RAG 的通过阈值。
-如果 B 只超过同批次 GLM-5.2 A、但没有达到对应数据集的历史参照，只能说明方法对当前 GLM
-lane 有效，不能声称能力已超过 README 中的原实现。
+方法有效必须同时满足：
 
-即使 B 数值超过历史参照，由于 Agent、代码、索引和运行时行为仍可能不同，也只能表述为
-“超过 README 同数据集历史参照”。若要严格声称“超过原 tRPC-Agent-Go 实现”，还需要在
-当前 harness 下复跑 DeepSeek-V3.2 + Gemini-3-Flash 对照。
+1. Answer Correctness 绝对提升不少于 `0.02`；
+2. 按第 9 节计算的 paired bootstrap 95% CI 下界大于 `0`；
+3. Context Precision 点差不低于 `-0.01`；
+4. B 的 Agent 最终失败率相对 A 不恶化超过 `1` 个百分点；
+5. 三次 repeat、固定分母、Judge 指标和所有关键 lineage 完整。
 
-### 7.4 非回归条件
+Context Recall、Faithfulness、累计 gold evidence recall、实际搜索次数、延迟和 token 是支持或
+机制指标，不作为额外硬门。
 
-HuggingFace Documentation 和 RGB 的关键指标相对 A 组：
-
-- `Answer Correctness` 不下降超过 `0.01`；
-- `Context Precision` 不下降超过 `0.01`；
-- 反事实或错误信息导致的回答退化不得明显增加；
-- 不得出现系统性同文档错误 chunk 排名上升。
-
-### 7.5 结论
-
-实验结论只能是以下四类之一：
+正式结论只有：
 
 ```text
-有效且达到能力目标：
-I1、I2、对应数据集历史能力参照和非回归条件均达到，可以开始评估框架化价值。
+method_effective:
+    I2 满足全部确认性门槛；可以开始非回归和框架化价值评估。
 
-方法有效但能力目标未达到：
-同批次 B 显著超过 A，但未达到对应历史参照；只证明当前 GLM lane 上的方法收益。
+method_not_effective:
+    证据完整，但主指标或 guardrail 未通过；停止框架化。
 
-无效：
-I1 或 I2 没有达到方法有效性门槛，停止框架化设计。
-
-证据不足：
-存在运行失败、样本不一致、指标不可比或显著性不足，
-修复证据问题后再判断，不将其描述为有效。
+insufficient:
+    数据、索引、运行、Judge 或统计证据不完整；修复基础设施后重跑完整受影响 repeat。
 ```
 
-达到有效性标准不自动意味着该方法应成为 TAG 默认能力，也不自动确定其公共 API。
+使用 GLM-5.2 Judge 的本轮数值不得直接声明超过 README 的 Gemini-3-Flash 历史实现。
 
-本轮实际结论为“无效”：I1 正式证据完整，但未达到第 7.1 节门槛。按预注册停止线，I2、
-非回归和框架化设计均不继续。
+## 12. 非回归与框架化
 
-## 8. 验收标准
-
-1. A、B 使用相同的父文档、chunks、embedding 模型和检索配置。
-2. A、B 的每个 chunk 可以通过稳定实验 ID 一一对应。
-3. B 的唯一检索表示变化是增加由父文档和当前 chunk 生成的 context。
-4. B 保持原始 `Document.Content`、query 和回答上下文不变。
-5. 已有自定义 `EmbeddingText` 在 B 中得到保留。
-6. Context 只使用父文档信息，空输出和生成失败均可观察。
-7. 同一组已生成 contexts 被检索和回答评测重复使用。
-8. A、B 使用相互隔离的全新索引，不复用不兼容向量。
-9. I1 完整 MultiHop-RAG 结果包含逐样本检索结果、gold evidence 命中和聚合对比。
-10. 只有 I1 达标才运行 I2，且 I2 完整 450 题包含逐样本和聚合对比。
-11. HuggingFace 和 RGB 只在最终阶段完成一次非回归检查。
-12. 质量、成本和错误分别报告。
-13. 结果可以通过保存的命令、manifest 和 context 缓存复现。
-14. 结论严格依据本文有效性条件，不因单个指标上涨而宣称方案有效。
-
-## 9. 需求边界
-
-本需求应交付：
-
-```text
-一个最小 Contextual Embedding 实验实现
-+ feature-off / feature-on 的同路径对照
-+ 可审计和复用的 context 实验产物
-+ evidence-aware retrieval-only A/B 与门禁报告
-+ 通过门禁后的完整端到端 A/B 结果
-+ 质量、成本和停止结论
-```
+只有 `method_effective` 后才运行 HuggingFace/RGB 非回归，并评估是否将实验能力沉淀为 TAG
+框架 API。
 
 本需求不包含：
 
 - TAG 公共 Contextualizer API；
-- 正式 `WithContextualizer` option；
-- 通用 Custom Contextualizer；
-- 通用父文档或 GroupedSource 抽象；
-- 所有 source 和 vector store 的支持；
-- 生产级增量同步、fingerprint和索引迁移；
-- 生产级缓存、重试、fallback和监控；
-- Contextual BM25 或 sparse 索引改造；
-- reranker 输入改造；
-- query rewrite、HyDE 或其他查询阶段方法；
-- parent/neighbor expansion；
-- Late Chunking、token hidden state 或 span pooling；
-- GraphRAG 或知识图谱构建；
-- 默认启用或对外发布该方法；
-- 旧 benchmark 环境和历史数值的再次复现。
+- 通用父文档/GroupedSource 抽象；
+- 默认启用 Contextual Embedding；
+- Contextual BM25、reranker 或 HyDE；
+- query rewrite 方法变更；
+- Late Chunking、GraphRAG 或知识图谱；
+- 与历史 README 聚合分数的严格等价复现；
+- 生产级缓存、增量同步和索引迁移。
 
-如果实验未达到有效性标准，上述框架化事项不再继续。若实验有效，后续需求应基于实验代码
-和结果中已经确认的真实约束重新制定，而不是直接沿用本实验的临时代码形态。
+## 13. 当前执行顺序
+
+```text
+P0  清理非 A/B legacy 行为变更，并完成 experiment-only Vector enforcement
+P1  实现 I2 paired runner、Judge、统计和测试
+P2  DeepSeek 20-chunk Context probe
+P3  生成 13,086 Context，构建新 A/B 索引
+P4  在新索引上跑 DeepSeek Context I1 smoke；仅 promote 时扩大到 450 题（诊断，不门禁）
+P5  30-case Agent/Judge operational smoke，冻结 timeout / concurrency
+P6  运行 3 × 450 / arm I2 Agent cases
+P7  对冻结答案运行 GLM Judge并生成正式 paired 报告
+P8  根据第 11 节决定停止或进入非回归/框架化评估
+```
